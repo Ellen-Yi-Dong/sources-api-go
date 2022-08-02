@@ -15,7 +15,7 @@ import (
 var getRhcConnectionDao func(c echo.Context) (dao.RhcConnectionDao, error)
 
 func getDefaultRhcConnectionDao(c echo.Context) (dao.RhcConnectionDao, error) {
-	tenantId, err := util.GetTenantFromEchoContext(c)
+	tenantId, err := getTenantFromEchoContext(c)
 
 	if err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func RhcConnectionCreate(c echo.Context) error {
 
 	err := service.ValidateRhcConnectionRequest(input)
 	if err != nil {
-		return util.NewErrBadRequest(fmt.Sprintf("Validation failed: %v", err))
+		return util.NewErrBadRequest(fmt.Sprintf("Validation failed: %s", err.Error()))
 	}
 
 	rhcConnection := &model.RhcConnection{

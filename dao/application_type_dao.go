@@ -27,14 +27,14 @@ type applicationTypeDaoImpl struct {
 	TenantID *int64
 }
 
-func (at *applicationTypeDaoImpl) SubCollectionList(primaryCollection interface{}, limit, offset int, filters []util.Filter) ([]m.ApplicationType, int64, error) {
+func (a *applicationTypeDaoImpl) SubCollectionList(primaryCollection interface{}, limit, offset int, filters []util.Filter) ([]m.ApplicationType, int64, error) {
 	// allocating a slice of application types, initial length of
 	// 0, size of limit (since we will not be returning more than that)
 	applicationTypes := make([]m.ApplicationType, 0, limit)
 
-	relationObject, err := m.NewRelationObject(primaryCollection, *at.TenantID, DB.Debug())
+	relationObject, err := m.NewRelationObject(primaryCollection, *a.TenantID, DB.Debug())
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, util.NewErrNotFound("source")
 	}
 
 	query := relationObject.HasMany(&m.ApplicationType{}, DB.Debug())
@@ -57,7 +57,7 @@ func (at *applicationTypeDaoImpl) SubCollectionList(primaryCollection interface{
 	return applicationTypes, count, nil
 }
 
-func (at *applicationTypeDaoImpl) List(limit, offset int, filters []util.Filter) ([]m.ApplicationType, int64, error) {
+func (a *applicationTypeDaoImpl) List(limit, offset int, filters []util.Filter) ([]m.ApplicationType, int64, error) {
 	// allocating a slice of application types, initial length of
 	// 0, size of limit (since we will not be returning more than that)
 	appTypes := make([]m.ApplicationType, 0, limit)
@@ -81,23 +81,17 @@ func (at *applicationTypeDaoImpl) List(limit, offset int, filters []util.Filter)
 	return appTypes, count, nil
 }
 
-func (at *applicationTypeDaoImpl) GetById(id *int64) (*m.ApplicationType, error) {
-	var appType m.ApplicationType
-
-	err := DB.Debug().
-		Model(&m.ApplicationType{}).
-		Where("id = ?", *id).
-		First(&appType).
-		Error
-
-	if err != nil {
+func (a *applicationTypeDaoImpl) GetById(id *int64) (*m.ApplicationType, error) {
+	appType := &m.ApplicationType{Id: *id}
+	result := DB.Debug().First(appType)
+	if result.Error != nil {
 		return nil, util.NewErrNotFound("application type")
 	}
 
-	return &appType, nil
+	return appType, nil
 }
 
-func (at *applicationTypeDaoImpl) GetByName(name string) (*m.ApplicationType, error) {
+func (a *applicationTypeDaoImpl) GetByName(name string) (*m.ApplicationType, error) {
 	appType := &m.ApplicationType{}
 	result := DB.Debug().Where("name LIKE ?", "%"+name+"%").First(&appType)
 	if result.Error != nil {
@@ -107,31 +101,24 @@ func (at *applicationTypeDaoImpl) GetByName(name string) (*m.ApplicationType, er
 	return appType, nil
 }
 
-func (at *applicationTypeDaoImpl) Create(_ *m.ApplicationType) error {
+func (a *applicationTypeDaoImpl) Create(_ *m.ApplicationType) error {
 	panic("not needed (yet) due to seeding.")
 }
 
-func (at *applicationTypeDaoImpl) Update(_ *m.ApplicationType) error {
+func (a *applicationTypeDaoImpl) Update(_ *m.ApplicationType) error {
 	panic("not needed (yet) due to seeding.")
 }
 
-func (at *applicationTypeDaoImpl) Delete(_ *int64) error {
+func (a *applicationTypeDaoImpl) Delete(_ *int64) error {
 	panic("not needed (yet) due to seeding.")
 }
 
 func (at *applicationTypeDaoImpl) ApplicationTypeCompatibleWithSource(typeId, sourceId int64) error {
 	// Looks up the source ID and then compare's the source-type's name with the
 	// application type's supported source types
-	var source m.Source
-
-	err := DB.Debug().
-		Model(&m.Source{}).
-		Where("id = ?", sourceId).
-		Preload("SourceType").
-		Find(&source).
-		Error
-
-	if err != nil {
+	source := m.Source{ID: sourceId}
+	result := DB.Debug().Preload("SourceType").Find(&source)
+	if result.Error != nil {
 		return fmt.Errorf("source not found")
 	}
 

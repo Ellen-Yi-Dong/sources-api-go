@@ -53,8 +53,7 @@ func TestMain(t *testing.M) {
 
 		service.Producer = func() events.Sender { return events.EventStreamProducer{Sender: &mocks.MockSender{}} }
 
-		database.CreateFixtures("public")
-
+		database.CreateFixtures()
 		err := dao.PopulateStaticTypeCache()
 		if err != nil {
 			panic("failed to populate static type cache")

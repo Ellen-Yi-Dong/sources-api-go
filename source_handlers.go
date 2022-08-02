@@ -17,12 +17,13 @@ import (
 var getSourceDao func(c echo.Context) (dao.SourceDao, error)
 
 func getSourceDaoWithTenant(c echo.Context) (dao.SourceDao, error) {
-	requestParams, err := dao.NewRequestParamsFromContext(c)
+	tenantId, err := getTenantFromEchoContext(c)
+
 	if err != nil {
 		return nil, err
 	}
 
-	return dao.GetSourceDao(requestParams), nil
+	return dao.GetSourceDao(&tenantId), nil
 }
 
 func SourceList(c echo.Context) error {
@@ -103,7 +104,7 @@ func SourceCreate(c echo.Context) error {
 
 	err = service.ValidateSourceCreationRequest(sourcesDB, input)
 	if err != nil {
-		return util.NewErrBadRequest(fmt.Sprintf("Validation failed: %v", err))
+		return util.NewErrBadRequest(fmt.Sprintf("Validation failed: %s", err.Error()))
 	}
 
 	source := &m.Source{
@@ -207,7 +208,7 @@ func SourceDelete(c echo.Context) (err error) {
 		return err
 	}
 
-	err = service.DeleteCascade(sourcesDB.Tenant(), sourcesDB.User(), "Source", id, forwardableHeaders)
+	err = service.DeleteCascade(sourcesDB.Tenant(), "Source", id, forwardableHeaders)
 	if err != nil {
 		return util.NewErrBadRequest(err)
 	}
@@ -436,23 +437,11 @@ func SourcePause(c echo.Context) error {
 		return err
 	}
 
-	// Check if the source exists
-	srcExists, err := sourceDao.Exists(sourceId)
-	if err != nil {
-		return err
-	}
-
-	if !srcExists {
-		return util.NewErrNotFound("source")
-	}
-
-	// Pause the existing source
 	err = sourceDao.Pause(sourceId)
 	if err != nil {
 		return util.NewErrBadRequest(err)
 	}
 
-	// Load the source's applications
 	source, err := sourceDao.GetByIdWithPreload(&sourceId, "Applications")
 	if err != nil {
 		return err
@@ -494,23 +483,11 @@ func SourceUnpause(c echo.Context) error {
 		return err
 	}
 
-	// Check if the source exists
-	srcExists, err := sourceDao.Exists(sourceId)
-	if err != nil {
-		return err
-	}
-
-	if !srcExists {
-		return util.NewErrNotFound("source")
-	}
-
-	// Unpause the existing source
 	err = sourceDao.Unpause(sourceId)
 	if err != nil {
 		return util.NewErrBadRequest(err)
 	}
 
-	// Load the source's applications
 	source, err := sourceDao.GetByIdWithPreload(&sourceId, "Applications")
 	if err != nil {
 		return err

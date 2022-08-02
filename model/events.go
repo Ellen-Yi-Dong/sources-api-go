@@ -40,7 +40,7 @@ func UpdateMessage(eventObject EventModelDao, resource util.Resource, attributes
 
 	data, err := json.Marshal(updatedAttributes)
 	if err != nil {
-		return nil, fmt.Errorf("error in parsing update attributes: %v", err)
+		return nil, fmt.Errorf("error in parsing update attributes: %s", err.Error())
 	}
 
 	return data, nil

@@ -34,11 +34,7 @@ func (sj *ScheduledJob) runForever() {
 // are adding a new job that we want run on a schedule, add it here.
 //
 // example: var schedule = []ScheduledJob{{Interval: 5 * time.Second, Job: &AsyncDestroyJob{}}}
-var schedule = []ScheduledJob{
-	// scheduled job that runs every 2 minutes and re-sends any unavailable
-	// sources that haven't ever went available
-	{Interval: 2 * time.Minute, Job: &RetryCreateJob{}},
-}
+var schedule = []ScheduledJob{}
 
 // runScheduledJobs runs all of the jobs on a schedule forever.
 func runScheduledJobs() {

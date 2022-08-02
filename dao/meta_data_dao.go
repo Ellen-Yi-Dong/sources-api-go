@@ -32,7 +32,7 @@ func (md *metaDataDaoImpl) SubCollectionList(primaryCollection interface{}, limi
 	metadatas := make([]m.MetaData, 0, limit)
 	relationObject, err := m.NewRelationObject(primaryCollection, -1, DB.Debug())
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, util.NewErrNotFound("application type")
 	}
 
 	query := relationObject.HasMany(&m.MetaData{}, DB.Debug())
@@ -73,20 +73,13 @@ func (md *metaDataDaoImpl) List(limit int, offset int, filters []util.Filter) ([
 }
 
 func (md *metaDataDaoImpl) GetById(id *int64) (*m.MetaData, error) {
-	var metaData m.MetaData
-
-	err := DB.
-		Debug().
-		Model(&m.MetaData{}).
-		Where("id = ?", *id).
-		First(&metaData).
-		Error
-
-	if err != nil {
+	metaData := &m.MetaData{ID: *id}
+	result := DB.Debug().First(&metaData)
+	if result.Error != nil {
 		return nil, util.NewErrNotFound("metadata")
 	}
 
-	return &metaData, nil
+	return metaData, nil
 }
 
 func (md *metaDataDaoImpl) GetSuperKeySteps(applicationTypeId int64) ([]m.MetaData, error) {

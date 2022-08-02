@@ -18,7 +18,6 @@ type SourceDao interface {
 	Update(src *m.Source) error
 	Delete(id *int64) (*m.Source, error)
 	Tenant() *int64
-	User() *int64
 	NameExistsInCurrentTenant(name string) bool
 	GetByIdWithPreload(id *int64, preloads ...string) (*m.Source, error)
 	// ListForRhcConnection gets all the sources that are related to a given rhcConnection id.
@@ -46,7 +45,6 @@ type ApplicationDao interface {
 	Update(src *m.Application) error
 	Delete(id *int64) (*m.Application, error)
 	Tenant() *int64
-	User() *int64
 	BulkMessage(resource util.Resource) (map[string]interface{}, error)
 	FetchAndUpdateBy(resource util.Resource, updateAttributes map[string]interface{}) (interface{}, error)
 	ToEventJSON(resource util.Resource) ([]byte, error)
@@ -172,8 +170,4 @@ type TenantDao interface {
 	// TenantByIdentity returns the tenant associated to the given identity. It tries to fetch the tenant by its OrgId,
 	// and if it is not preset, by its EBS account number.
 	TenantByIdentity(identity *identity.Identity) (*m.Tenant, error)
-}
-
-type UserDao interface {
-	FindOrCreate(userID string) (*m.User, error)
 }

@@ -8,13 +8,12 @@ import (
 	"time"
 
 	"github.com/RedHatInsights/sources-api-go/config"
-	"github.com/RedHatInsights/sources-api-go/db/migrations"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/fixtures"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/mocks"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/parser"
 	logging "github.com/RedHatInsights/sources-api-go/logger"
-	"github.com/go-gormigrate/gormigrate/v2"
-	"github.com/sirupsen/logrus"
+	m "github.com/RedHatInsights/sources-api-go/model"
+	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -27,9 +26,6 @@ var defaultSchema = "dao"
 
 func TestMain(t *testing.M) {
 	flags = parser.ParseFlags()
-
-	logging.Log = logrus.New()
-
 	if flags.Integration {
 		Vault = &mocks.MockVault{}
 		ConnectAndMigrateDB("dao")
@@ -129,9 +125,9 @@ func CreateFixtures(schema string) {
 
 	DB.Create(&fixtures.TestApplicationTypeData)
 	DB.Create(&fixtures.TestApplicationData)
+	DB.Create(&fixtures.TestApplicationAuthenticationData)
 
 	DB.Create(&fixtures.TestAuthenticationData)
-	DB.Create(&fixtures.TestApplicationAuthenticationData)
 
 	DB.Create(&fixtures.TestMetaDataData)
 
@@ -152,12 +148,45 @@ func DropSchema(dbSchema string) {
 
 // MigrateSchema migrates all the models for the current schema.
 func MigrateSchema() {
-	// Perform the migrations and store the error for a proper return.
-	migrateTool := gormigrate.New(DB, gormigrate.DefaultOptions, migrations.MigrationsCollection)
-	err := migrateTool.Migrate()
+	// Use a custom "authentication" table to avoid Gorm creating FKs when the real databases don't have them.
+	type authentication struct {
+		Id                      int64          `gorm:"primaryKey"`
+		Name                    string         `gorm:"column:name"`
+		AuthType                string         `gorm:"column:authtype"`
+		Username                string         `gorm:"column:username"`
+		MiqPassword             string         `gorm:"column:password"`
+		Password                string         `gorm:"column:password_hash"`
+		Extra                   datatypes.JSON `gorm:"column:extra"`
+		Version                 string         `gorm:"column:version"`
+		AvailabilityStatus      string         `gorm:"column:availability_status"`
+		AvailabilityStatusError string         `gorm:"column:availability_status_error"`
+		LastCheckedAt           time.Time      `gorm:"column:last_checked_at"`
+		LastAvailableAt         time.Time      `gorm:"column:last_available_at"`
+		SourceId                int64          `gorm:"column:source_id"`
+		TenantId                int64          `gorm:"column:tenant_id"`
+		UserID                  *int64         `gorm:"column:user_id"`
+		ResourceType            string         `gorm:"column:resource_type"`
+		ResourceId              int64          `gorm:"column:resource_id"`
+		CreatedAt               time.Time      `gorm:"column:created_at"`
+		UpdatedAt               time.Time      `gorm:"column:updated_at"`
+	}
+
+	err := DB.AutoMigrate(
+		&m.SourceType{},
+		&m.ApplicationType{},
+		&m.MetaData{},
+
+		&m.Source{},
+		&m.Endpoint{},
+		&m.RhcConnection{},
+		&m.SourceRhcConnection{},
+		&m.Application{},
+		&authentication{},
+		&m.ApplicationAuthentication{},
+	)
 
 	if err != nil {
-		log.Fatalf(`error migrating the schema: %s`, err)
+		log.Fatalf("Error automigrating the schema: %s", err)
 	}
 }
 

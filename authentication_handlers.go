@@ -17,12 +17,13 @@ import (
 var getAuthenticationDao func(c echo.Context) (dao.AuthenticationDao, error)
 
 func getAuthenticationDaoWithTenant(c echo.Context) (dao.AuthenticationDao, error) {
-	requestParams, err := dao.NewRequestParamsFromContext(c)
+	tenantId, err := getTenantFromEchoContext(c)
+
 	if err != nil {
 		return nil, err
 	}
 
-	return dao.GetAuthenticationDao(requestParams), nil
+	return dao.GetAuthenticationDao(&tenantId), nil
 }
 
 func AuthenticationList(c echo.Context) error {
@@ -175,11 +176,7 @@ func AuthenticationEdit(c echo.Context) error {
 		return util.NewErrBadRequest(err)
 	}
 
-	sourceDao, err := getSourceDao(c)
-	if err != nil {
-		return err
-	}
-
+	sourceDao := dao.GetSourceDao(authDao.Tenant())
 	source, err := sourceDao.GetById(&auth.SourceID)
 	if err != nil {
 		return err

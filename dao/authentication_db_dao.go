@@ -1,45 +1,23 @@
 package dao
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	m "github.com/RedHatInsights/sources-api-go/model"
 	"github.com/RedHatInsights/sources-api-go/util"
-	"gorm.io/gorm"
 )
 
 type authenticationDaoDbImpl struct {
 	TenantID *int64
-	UserID   *int64
-	ctx      context.Context
-}
-
-func (add *authenticationDaoDbImpl) getDb() *gorm.DB {
-	if add.TenantID == nil {
-		panic("nil tenant found in sourceDaoImpl DAO")
-	}
-
-	query := DB.Debug().WithContext(add.ctx)
-	query = query.Where("tenant_id = ?", add.TenantID)
-
-	if add.UserID != nil {
-		query = query.Where("user_id IS NULL OR user_id = ?", add.UserID)
-	} else {
-		query = query.Where("user_id IS NULL")
-	}
-
-	return query
-}
-
-func (add *authenticationDaoDbImpl) getDbWithModel() *gorm.DB {
-	return add.getDb().Model(&m.Authentication{})
 }
 
 func (add *authenticationDaoDbImpl) List(limit, offset int, filters []util.Filter) ([]m.Authentication, int64, error) {
-	query := add.getDbWithModel()
+	query := DB.
+		Debug().
+		Where("authentications.tenant_id = ?", add.TenantID).
+		Model(&m.Authentication{})
 
 	query, err := applyFilters(query, filters)
 	if err != nil {
@@ -66,11 +44,10 @@ func (add *authenticationDaoDbImpl) List(limit, offset int, filters []util.Filte
 }
 
 func (add *authenticationDaoDbImpl) GetById(id string) (*m.Authentication, error) {
-	var authentication m.Authentication
+	authentication := &m.Authentication{}
 
 	err := DB.
 		Debug().
-		Model(&m.Authentication{}).
 		Where("id = ?", id).
 		Where("tenant_id = ?", add.TenantID).
 		First(&authentication).
@@ -80,7 +57,7 @@ func (add *authenticationDaoDbImpl) GetById(id string) (*m.Authentication, error
 		return nil, util.NewErrNotFound("authentication")
 	}
 
-	return &authentication, nil
+	return authentication, nil
 }
 
 func (add *authenticationDaoDbImpl) ListForSource(sourceID int64, limit, offset int, filters []util.Filter) ([]m.Authentication, int64, error) {
@@ -103,7 +80,9 @@ func (add *authenticationDaoDbImpl) ListForSource(sourceID int64, limit, offset 
 	}
 
 	// List and count all the authentications from the given source.
-	query := add.getDbWithModel()
+	query := DB.
+		Debug().
+		Model(&m.Authentication{})
 
 	query, err = applyFilters(query, filters)
 	if err != nil {
@@ -114,6 +93,7 @@ func (add *authenticationDaoDbImpl) ListForSource(sourceID int64, limit, offset 
 	count := int64(0)
 	query.
 		Where("source_id = ?", sourceID).
+		Where("tenant_id = ?", add.TenantID).
 		Count(&count)
 
 	// limiting + running the actual query.
@@ -151,7 +131,9 @@ func (add *authenticationDaoDbImpl) ListForApplication(applicationID int64, limi
 	}
 
 	// List and count all the authentications from the given application.
-	query := add.getDbWithModel()
+	query := DB.
+		Debug().
+		Model(&m.Authentication{})
 
 	query, err = applyFilters(query, filters)
 	if err != nil {
@@ -163,6 +145,7 @@ func (add *authenticationDaoDbImpl) ListForApplication(applicationID int64, limi
 	query.
 		Where("resource_id = ?", applicationID).
 		Where("resource_type = 'Application'").
+		Where("tenant_id = ?", add.TenantID).
 		Count(&count)
 
 	// limiting + running the actual query.
@@ -170,6 +153,7 @@ func (add *authenticationDaoDbImpl) ListForApplication(applicationID int64, limi
 	err = query.
 		Where("resource_id = ?", applicationID).
 		Where("resource_type = 'Application'").
+		Where("tenant_id = ?", add.TenantID).
 		Limit(limit).
 		Offset(offset).
 		Find(&authentications).
@@ -184,10 +168,11 @@ func (add *authenticationDaoDbImpl) ListForApplication(applicationID int64, limi
 
 func (add *authenticationDaoDbImpl) ListForApplicationAuthentication(appAuthID int64, _, _ int, _ []util.Filter) ([]m.Authentication, int64, error) {
 	// Get application authentication
-	var appAuth m.ApplicationAuthentication
+	appAuth := &m.ApplicationAuthentication{ID: appAuthID}
 
-	err := add.getDb().
-		Where("id = ?", appAuthID).
+	err := DB.
+		Debug().
+		Where("tenant_id = ?", add.TenantID).
 		First(&appAuth).
 		Error
 
@@ -226,7 +211,8 @@ func (add *authenticationDaoDbImpl) ListForEndpoint(endpointID int64, limit, off
 	}
 
 	// List and count all the authentications from the given endpoint.
-	query := add.getDbWithModel()
+	query := DB.Debug().
+		Model(&m.Authentication{})
 
 	query, err = applyFilters(query, filters)
 	if err != nil {
@@ -238,6 +224,7 @@ func (add *authenticationDaoDbImpl) ListForEndpoint(endpointID int64, limit, off
 	query.
 		Where("resource_id = ?", endpointID).
 		Where("resource_type = 'Endpoint'").
+		Where("tenant_id = ?", add.TenantID).
 		Count(&count)
 
 	// limiting + running the actual query.
@@ -245,6 +232,7 @@ func (add *authenticationDaoDbImpl) ListForEndpoint(endpointID int64, limit, off
 	err = query.
 		Where("resource_id = ?", endpointID).
 		Where("resource_type = 'Endpoint'").
+		Where("tenant_id = ?", add.TenantID).
 		Limit(limit).
 		Offset(offset).
 		Find(&authentications).
@@ -258,48 +246,26 @@ func (add *authenticationDaoDbImpl) ListForEndpoint(endpointID int64, limit, off
 }
 
 func (add *authenticationDaoDbImpl) Create(authentication *m.Authentication) error {
-	query := DB.Debug().
-		Where("tenant_id = ?", *add.TenantID)
+	query := DB.Debug().Select("source_id").Where("tenant_id = ?", *add.TenantID)
 
 	switch strings.ToLower(authentication.ResourceType) {
 	case "application":
-		var app m.Application
-		err := query.
-			Model(&m.Application{}).
-			Where("id = ?", authentication.ResourceID).
-			First(&app).
-			Error
-
-		if err != nil {
+		app := m.Application{ID: authentication.ResourceID}
+		result := query.Model(&app).First(&app)
+		if result.Error != nil {
 			return fmt.Errorf("resource not found with type [%v], id [%v]", authentication.ResourceType, authentication.ResourceID)
 		}
 
 		authentication.SourceID = app.SourceID
 	case "endpoint":
-		var endpoint m.Endpoint
-		err := query.
-			Model(&m.Endpoint{}).
-			Where("id = ?", authentication.ResourceID).
-			First(&endpoint).
-			Error
-
-		if err != nil {
+		endpoint := m.Endpoint{ID: authentication.ResourceID}
+		result := query.Model(&endpoint).First(&endpoint)
+		if result.Error != nil {
 			return fmt.Errorf("resource not found with type [%v], id [%v]", authentication.ResourceType, authentication.ResourceID)
 		}
 
 		authentication.SourceID = endpoint.SourceID
 	case "source":
-		var source m.Source
-		err := query.
-			Model(&m.Source{}).
-			Where("id = ?", authentication.ResourceID).
-			First(&source).
-			Error
-
-		if err != nil {
-			return fmt.Errorf("resource not found with type [%v], id [%v]", authentication.ResourceType, authentication.ResourceID)
-		}
-
 		authentication.SourceID = authentication.ResourceID
 	default:
 		return fmt.Errorf("bad resource type, supported types are [Application, Endpoint, Source]")
@@ -338,7 +304,9 @@ func (add *authenticationDaoDbImpl) BulkCreate(auth *m.Authentication) error {
 }
 
 func (add *authenticationDaoDbImpl) Update(authentication *m.Authentication) error {
-	return add.getDb().
+	return DB.
+		Debug().
+		Where("tenant_id = ?", add.TenantID).
 		Updates(authentication).
 		Error
 }
@@ -346,8 +314,10 @@ func (add *authenticationDaoDbImpl) Update(authentication *m.Authentication) err
 func (add *authenticationDaoDbImpl) Delete(id string) (*m.Authentication, error) {
 	var authentication m.Authentication
 
-	err := add.getDb().
+	err := DB.
+		Debug().
 		Where("id = ?", id).
+		Where("tenant_id = ?", add.TenantID).
 		First(&authentication).
 		Error
 
@@ -355,8 +325,10 @@ func (add *authenticationDaoDbImpl) Delete(id string) (*m.Authentication, error)
 		return nil, util.NewErrNotFound("authentication")
 	}
 
-	err = add.getDb().
-		Delete(&authentication).
+	err = DB.
+		Debug().
+		Where("tenant_id = ?", add.TenantID).
+		Delete(authentication).
 		Error
 
 	if err != nil {
@@ -403,6 +375,7 @@ func (add *authenticationDaoDbImpl) BulkMessage(resource util.Resource) (map[str
 }
 
 func (add *authenticationDaoDbImpl) FetchAndUpdateBy(resource util.Resource, updateAttributes map[string]interface{}) (interface{}, error) {
+	add.TenantID = &resource.TenantID
 	authentication, err := add.GetById(resource.ResourceUID)
 	if err != nil {
 		return nil, err
@@ -417,7 +390,7 @@ func (add *authenticationDaoDbImpl) FetchAndUpdateBy(resource util.Resource, upd
 		return nil, err
 	}
 
-	sourceDao := GetSourceDao(&RequestParams{TenantID: add.TenantID})
+	sourceDao := GetSourceDao(add.TenantID)
 	source, err := sourceDao.GetById(&authentication.SourceID)
 	if err != nil {
 		return nil, err

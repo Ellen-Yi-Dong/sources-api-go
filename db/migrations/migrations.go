@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var MigrationsCollection = []*gormigrate.Migration{
+var migrationsCollection = []*gormigrate.Migration{
 	InitialSchema(),
 	AddOrgIdToTenants(),
 	TranslateEbsAccountNumbersToOrgIds(),
@@ -23,7 +23,6 @@ var MigrationsCollection = []*gormigrate.Migration{
 	AddTenantsExternalTenantOrgIdUniqueIndex(),
 	AddUserIdColumnIntoTables(),
 	AddResourceOwnershipToApplicationTypes(),
-	AddApplicationConstraint(),
 }
 
 var ctx = context.Background()
@@ -73,7 +72,7 @@ func Migrate(db *gorm.DB) {
 	}
 
 	// Perform the migrations and store the error for a proper return.
-	migrateTool := gormigrate.New(db, gormigrate.DefaultOptions, MigrationsCollection)
+	migrateTool := gormigrate.New(db, gormigrate.DefaultOptions, migrationsCollection)
 	err = migrateTool.Migrate()
 	if err != nil {
 		logging.Log.Fatalf(`error when performing the database migrations: %s. The Redis lock is going to try to be released...`, err)

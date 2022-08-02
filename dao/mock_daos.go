@@ -141,10 +141,6 @@ func (src *MockSourceDao) Tenant() *int64 {
 	tenant := int64(1)
 	return &tenant
 }
-func (src *MockSourceDao) User() *int64 {
-	user := int64(1)
-	return &user
-}
 
 func (src *MockSourceDao) Exists(sourceId int64) (bool, error) {
 	for _, source := range src.Sources {
@@ -319,16 +315,16 @@ func (a *MockApplicationTypeDao) SubCollectionList(primaryCollection interface{}
 			return nil, 0, util.NewErrNotFound("source")
 		}
 
-		appTypes := make(map[int64]int)
+		var appTypeIdList []int
 		for _, app := range fixtures.TestApplicationData {
 			if app.SourceID == object.ID {
-				appTypes[app.ApplicationTypeID]++
+				appTypeIdList = append(appTypeIdList, int(app.ApplicationTypeID))
 			}
 		}
 
 		for _, appType := range a.ApplicationTypes {
-			for id := range appTypes {
-				if appType.Id == id {
+			for _, id := range appTypeIdList {
+				if appType.Id == int64(id) {
 					appTypesOut = append(appTypesOut, appType)
 					break
 				}
@@ -477,11 +473,6 @@ func (a *MockApplicationDao) Tenant() *int64 {
 	return &tenant
 }
 
-func (a *MockApplicationDao) User() *int64 {
-	user := int64(1)
-	return &user
-}
-
 func (a *MockApplicationDao) DeleteCascade(applicationId int64) ([]m.ApplicationAuthentication, *m.Application, error) {
 	var application *m.Application
 	for _, app := range fixtures.TestApplicationData {
@@ -532,35 +523,24 @@ func (src *MockApplicationDao) IsSuperkey(id int64) bool {
 }
 
 func (a *MockEndpointDao) SubCollectionList(primaryCollection interface{}, limit, offset int, filters []util.Filter) ([]m.Endpoint, int64, error) {
-	// Return not found err when the source doesn't exist
-	var sourceExist bool
-	var sourceId int64
-	switch object := primaryCollection.(type) {
-	case m.Source:
-		for _, source := range fixtures.TestSourceData {
-			if object.ID == source.ID {
-				sourceExist = true
-				sourceId = object.ID
-				break
+	var endpoints []m.Endpoint
+
+	for index, i := range a.Endpoints {
+		switch object := primaryCollection.(type) {
+		case m.Source:
+			if i.SourceID == object.ID {
+				endpoints = append(endpoints, a.Endpoints[index])
 			}
-		}
-	default:
-		return nil, 0, fmt.Errorf("unexpected primary collection type")
-	}
-
-	if !sourceExist {
-		return nil, 0, util.NewErrNotFound("source")
-	}
-
-	// Get list of endpoints for existing source
-	var endpointsOut []m.Endpoint
-	for _, e := range a.Endpoints {
-		if e.SourceID == sourceId {
-			endpointsOut = append(endpointsOut, e)
+		default:
+			return nil, 0, fmt.Errorf("unexpected primary collection type")
 		}
 	}
+	count := int64(len(endpoints))
+	if count == 0 {
+		return nil, count, util.NewErrNotFound("endpoint")
+	}
 
-	return endpointsOut, int64(len(endpointsOut)), nil
+	return endpoints, count, nil
 }
 
 func (a *MockEndpointDao) List(limit int, offset int, filters []util.Filter) ([]m.Endpoint, int64, error) {

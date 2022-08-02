@@ -13,7 +13,6 @@ const defaultLimit = 500
 // Struct to track any information on the current GraphQL request
 type RequestData struct {
 	TenantID  int64
-	UserID    *int64
 	CountChan chan int
 
 	// Mutex + pointer to a collection so that we only load applications or
@@ -49,7 +48,7 @@ func (rd *RequestData) EnsureApplicationsAreLoaded() error {
 	// again due to the fact that multiple threads might have locked this the
 	// first time
 	if rd.applicationMap == nil {
-		apps, _, err := dao.GetApplicationDao(&dao.RequestParams{TenantID: &rd.TenantID, UserID: rd.UserID}).List(defaultLimit, 0, []util.Filter{{Name: "source_id", Value: *rd.sourceIdList}})
+		apps, _, err := dao.GetApplicationDao(&rd.TenantID).List(defaultLimit, 0, []util.Filter{{Name: "source_id", Value: *rd.sourceIdList}})
 		if err != nil {
 			return err
 		}
@@ -110,7 +109,7 @@ func (rd *RequestData) EnsureAuthenticationsAreLoaded() error {
 	defer rd.SourceMutex.Unlock()
 
 	if rd.authenticationMap == nil {
-		auths, _, err := dao.GetAuthenticationDao(&dao.RequestParams{TenantID: &rd.TenantID}).List(defaultLimit, 0, []util.Filter{{Name: "source_id", Value: *rd.sourceIdList}})
+		auths, _, err := dao.GetAuthenticationDao(&rd.TenantID).List(defaultLimit, 0, []util.Filter{{Name: "source_id", Value: *rd.sourceIdList}})
 		if err != nil {
 			return err
 		}

@@ -87,7 +87,5 @@ func RunJobNow(j Job) {
 	err := j.Run()
 	if err != nil {
 		l.Log.Warnf("Error running job [ %v ], args [ %v ] : [ %v ]", j.Name(), j.Arguments(), err)
-		return
 	}
-	l.Log.Infof("Finished Job %v with %v", j.Name(), j.Arguments())
 }

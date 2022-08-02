@@ -13,7 +13,6 @@ import (
 	"testing"
 	time "time"
 
-	"github.com/RedHatInsights/sources-api-go/config"
 	"github.com/RedHatInsights/sources-api-go/dao"
 	"github.com/RedHatInsights/sources-api-go/internal/events"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils"
@@ -27,13 +26,11 @@ import (
 	"github.com/RedHatInsights/sources-api-go/service"
 	"github.com/RedHatInsights/sources-api-go/util"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/redhatinsights/platform-go-middlewares/identity"
 )
 
 func TestSourceApplicationSubcollectionList(t *testing.T) {
-	tenantId := int64(1)
 	sourceId := int64(1)
 
 	c, rec := request.CreateTestContext(
@@ -44,7 +41,7 @@ func TestSourceApplicationSubcollectionList(t *testing.T) {
 			"limit":    100,
 			"offset":   0,
 			"filters":  []util.Filter{},
-			"tenantID": tenantId,
+			"tenantID": int64(1),
 		},
 	)
 
@@ -82,7 +79,7 @@ func TestSourceApplicationSubcollectionList(t *testing.T) {
 
 	var wantData []m.Application
 	for _, app := range fixtures.TestApplicationData {
-		if app.SourceID == sourceId {
+		if app.SourceID == int64(sourceId) {
 			wantData = append(wantData, app)
 		}
 	}
@@ -107,11 +104,6 @@ func TestSourceApplicationSubcollectionList(t *testing.T) {
 
 	if a2["id"] != fmt.Sprintf("%d", wantData[1].ID) {
 		t.Error("ghosts infected the return")
-	}
-
-	err = checkAllApplicationsBelongToTenant(tenantId, out.Data)
-	if err != nil {
-		t.Error(err)
 	}
 
 	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
@@ -140,7 +132,29 @@ func TestSourceApplicationSubcollectionListEmptyList(t *testing.T) {
 		t.Error(err)
 	}
 
-	templates.EmptySubcollectionListTest(t, c, rec)
+	if rec.Code != 200 {
+		t.Error("Did not return 200")
+	}
+
+	var out util.Collection
+	err = json.Unmarshal(rec.Body.Bytes(), &out)
+	if err != nil {
+		t.Error("Failed unmarshaling output")
+	}
+
+	if out.Meta.Limit != 100 {
+		t.Error("limit not set correctly")
+	}
+
+	if out.Meta.Offset != 0 {
+		t.Error("offset not set correctly")
+	}
+
+	if len(out.Data) != 0 {
+		t.Error("not enough objects passed back from DB")
+	}
+
+	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
 }
 
 func TestSourceApplicationSubcollectionListNotFound(t *testing.T) {
@@ -226,70 +240,7 @@ func TestSourceApplicationSubcollectionListBadRequestInvalidFilter(t *testing.T)
 	templates.BadRequestTest(t, rec)
 }
 
-// TestSourceApplicationSubcollectionListTenantNotExists tests that not found err is
-// returned for not existing tenant
-func TestSourceApplicationSubcollectionListTenantNotExists(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := fixtures.NotExistingTenantId
-	sourceId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/sources/1/applications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("source_id")
-	c.SetParamValues(fmt.Sprintf("%d", sourceId))
-
-	notFoundSourceListApplications := ErrorHandlingContext(SourceListApplications)
-	err := notFoundSourceListApplications(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-// TestSourceApplicationSubcollectionListInvalidTenant tests that not found err is
-// returned existing tenant who doesn't own the source
-func TestSourceApplicationSubcollectionListInvalidTenant(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(2)
-	sourceId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/sources/1/applications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("source_id")
-	c.SetParamValues(fmt.Sprintf("%d", sourceId))
-
-	notFoundSourceListApplications := ErrorHandlingContext(SourceListApplications)
-	err := notFoundSourceListApplications(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
 func TestApplicationList(t *testing.T) {
-	tenantId := int64(1)
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
 		"/api/sources/v3.1/applications",
@@ -298,7 +249,7 @@ func TestApplicationList(t *testing.T) {
 			"limit":    100,
 			"offset":   0,
 			"filters":  []util.Filter{},
-			"tenantID": tenantId,
+			"tenantID": int64(1),
 		},
 	)
 
@@ -357,11 +308,6 @@ func TestApplicationList(t *testing.T) {
 		t.Error("ghosts infected the return")
 	}
 
-	err = checkAllApplicationsBelongToTenant(tenantId, out.Data)
-	if err != nil {
-		t.Error(err)
-	}
-
 	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
 }
 
@@ -390,65 +336,13 @@ func TestApplicationListBadRequestInvalidFilter(t *testing.T) {
 	templates.BadRequestTest(t, rec)
 }
 
-// TestApplicationListTenantNotExists tests that empty list is returned for not existing tenant
-func TestApplicationListTenantNotExists(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := fixtures.NotExistingTenantId
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	err := ApplicationList(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.EmptySubcollectionListTest(t, c, rec)
-}
-
-// TestApplicationListTenantWithoutApplications tests that empty list is returned for a tenant
-// without applications
-func TestApplicationListTenantWithoutApplications(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(3)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	err := ApplicationList(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.EmptySubcollectionListTest(t, c, rec)
-}
-
 func TestApplicationGet(t *testing.T) {
-	tenantId := int64(1)
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
 		"/api/sources/v3.1/applications/1",
 		nil,
 		map[string]interface{}{
-			"tenantID": tenantId,
+			"tenantID": int64(1),
 		},
 	)
 
@@ -473,78 +367,6 @@ func TestApplicationGet(t *testing.T) {
 	if outApplication.Extra == nil {
 		t.Error("ghosts infected the return")
 	}
-
-	// Convert ID from returned application into int64
-	outAppId, err := strconv.ParseInt(outApplication.ID, 10, 64)
-	if err != nil {
-		t.Error(err)
-	}
-
-	// Check in fixtures that returned application belongs to the desired tenant
-	for _, app := range fixtures.TestApplicationData {
-		if app.ID == outAppId {
-			if app.TenantID != tenantId {
-				t.Errorf("wrong tenant id, expected %d, got %d", tenantId, app.TenantID)
-			}
-			break
-		}
-	}
-}
-
-// TestApplicationGetInvalidTenant tests that not found is returned for
-// existing app id but the tenant doesn't own the app
-func TestApplicationGetInvalidTenant(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(3)
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications/1",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationGet := ErrorHandlingContext(ApplicationGet)
-	err := notFoundApplicationGet(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-// TestApplicationGetTenantNotExists tests that not found is returned for
-// not existing tenant
-func TestApplicationGetTenantNotExists(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := fixtures.NotExistingTenantId
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications/1",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationGet := ErrorHandlingContext(ApplicationGet)
-	err := notFoundApplicationGet(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
 }
 
 func TestApplicationGetNotFound(t *testing.T) {
@@ -596,7 +418,7 @@ func TestApplicationCreateGood(t *testing.T) {
 
 	req := m.ApplicationCreateRequest{
 		SourceIDRaw:          "2",
-		ApplicationTypeIDRaw: "2",
+		ApplicationTypeIDRaw: "1",
 		Extra:                nil,
 	}
 
@@ -735,38 +557,6 @@ func TestApplicationEdit(t *testing.T) {
 	backupNotificationProducer := service.NotificationProducer
 	service.NotificationProducer = &mocks.MockAvailabilityStatusNotificationProducer{}
 
-	sourceDao := dao.GetSourceDao(&dao.RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
-
-	uuid := uuid.New().String()
-
-	fixtureSource := m.Source{
-		SourceTypeID:       fixtures.TestSourceTypeData[0].Id,
-		AvailabilityStatus: "",
-		Uid:                &uuid,
-	}
-
-	err := sourceDao.Create(&fixtureSource)
-	if err != nil {
-		t.Error(err)
-	}
-
-	sourceID := fixtureSource.ID
-
-	applicationDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
-	fixtureApp := m.Application{
-		ApplicationTypeID:  fixtures.TestApplicationTypeData[0].Id,
-		SourceID:           sourceID,
-		TenantID:           fixtures.TestTenantData[0].Id,
-		AvailabilityStatus: "",
-	}
-
-	err = applicationDao.Create(&fixtureApp)
-	if err != nil {
-		t.Error(err)
-	}
-
-	applicationID := fixtureApp.ID
-
 	req := m.ApplicationEditRequest{
 		Extra:                   map[string]interface{}{"thing": true},
 		AvailabilityStatus:      util.StringRef("available"),
@@ -777,30 +567,20 @@ func TestApplicationEdit(t *testing.T) {
 
 	c, rec := request.CreateTestContext(
 		http.MethodPatch,
-		"/api/sources/v3.1/applications/"+strconv.Itoa(int(applicationID)),
+		"/api/sources/v3.1/applications/1",
 		bytes.NewReader(body),
 		map[string]interface{}{
-			"tenantID": fixtures.TestTenantData[0].Id,
+			"tenantID": int64(1),
 		},
 	)
 
-	application, _ := applicationDao.GetById(&applicationID)
-	previousApplicationStatus := application.AvailabilityStatus
-
-	src, err := sourceDao.GetById(&application.SourceID)
-	if err != nil {
-		t.Error(err)
-	}
-
-	previousSourceStatus := src.AvailabilityStatus
-
 	c.SetParamNames("id")
-	c.SetParamValues(strconv.Itoa(int(applicationID)))
+	c.SetParamValues("1")
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	c.Set("identity", &identity.XRHID{Identity: identity.Identity{AccountNumber: fixtures.TestTenantData[0].ExternalTenant}})
 
 	appEditHandlerWithNotifier := middleware.Notifier(ApplicationEdit)
-	err = appEditHandlerWithNotifier(c)
+	err := appEditHandlerWithNotifier(c)
 	if err != nil {
 		t.Error(err)
 	}
@@ -828,78 +608,17 @@ func TestApplicationEdit(t *testing.T) {
 	emailNotificationInfo := &m.EmailNotificationInfo{ResourceDisplayName: "Application",
 		CurrentAvailabilityStatus:  "available",
 		PreviousAvailabilityStatus: "unknown",
-		SourceName:                 src.Name,
-		SourceID:                   strconv.FormatInt(sourceID, 10),
+		SourceName:                 fixtures.TestSourceData[0].Name,
+		SourceID:                   strconv.FormatInt(fixtures.TestSourceData[0].ID, 10),
 		TenantID:                   strconv.FormatInt(fixtures.TestSourceData[0].TenantID, 10),
 	}
 
 	if !cmp.Equal(emailNotificationInfo, notificationProducer.EmailNotificationInfo) {
-		t.Errorf("Invalid email notification data")
+		t.Errorf("Invalid email notification data:")
 		t.Errorf("Expected: %v Obtained: %v", emailNotificationInfo, notificationProducer.EmailNotificationInfo)
 	}
 
-	application, _ = applicationDao.GetById(&applicationID)
-	if application.AvailabilityStatus == previousApplicationStatus {
-		t.Errorf("Invalid application availability status.")
-	}
-
-	src, err = sourceDao.GetById(&application.SourceID)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if src.AvailabilityStatus == previousSourceStatus {
-		t.Errorf("Invalid source availability status.")
-	}
-
-	_, err = applicationDao.Delete(&application.ID)
-	if err != nil {
-		t.Error(err)
-	}
-
-	_, err = sourceDao.Delete(&application.SourceID)
-	if err != nil {
-		t.Error(err)
-	}
-
 	service.NotificationProducer = backupNotificationProducer
-}
-
-// TestApplicationEditInvalidTenant tests situation when the tenant tries to
-// edit existing not owned application
-func TestApplicationEditInvalidTenant(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(2)
-	appId := int64(1)
-
-	req := m.ApplicationEditRequest{
-		Extra:                   map[string]interface{}{"thing": true},
-		AvailabilityStatus:      util.StringRef("available"),
-		AvailabilityStatusError: util.StringRef(""),
-	}
-
-	body, _ := json.Marshal(req)
-
-	c, rec := request.CreateTestContext(
-		http.MethodPatch,
-		"/api/sources/v3.1/applications/1",
-		bytes.NewReader(body),
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
-
-	notFoundApplicationEdit := ErrorHandlingContext(ApplicationEdit)
-	err := notFoundApplicationEdit(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
 }
 
 func TestApplicationEditNotFound(t *testing.T) {
@@ -974,27 +693,20 @@ func TestApplicationDelete(t *testing.T) {
 
 	// Create a source
 	tenantID := fixtures.TestTenantData[0].Id
-	sourceDao := dao.GetSourceDao(&dao.RequestParams{TenantID: &tenantID})
+	sourceDao := dao.GetSourceDao(&tenantID)
 
-	uid, err := uuid.NewUUID()
-	if err != nil {
-		t.Errorf(`could not create UUID fro the fixture source: %s`, err)
-	}
-
-	uidStr := uid.String()
 	src := m.Source{
 		Name:         "Source for TestApplicationDelete()",
 		SourceTypeID: 1,
-		Uid:          &uidStr,
 	}
 
-	err = sourceDao.Create(&src)
+	err := sourceDao.Create(&src)
 	if err != nil {
 		t.Errorf("source not created correctly: %s", err)
 	}
 
 	// Create an application
-	applicationDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenantID})
+	applicationDao := dao.GetApplicationDao(&tenantID)
 
 	app := m.Application{
 		SourceID:          src.ID,
@@ -1008,7 +720,7 @@ func TestApplicationDelete(t *testing.T) {
 	}
 
 	// Create an authentication
-	authenticationDao := dao.GetAuthenticationDao(&dao.RequestParams{TenantID: &tenantID})
+	authenticationDao := dao.GetAuthenticationDao(&tenantID)
 
 	authName := "authentication for TestApplicationDelete()"
 	auth := m.Authentication{
@@ -1025,7 +737,7 @@ func TestApplicationDelete(t *testing.T) {
 	}
 
 	// Create an application authentication
-	appAuthDao := dao.GetApplicationAuthenticationDao(&dao.RequestParams{TenantID: &tenantID})
+	appAuthDao := dao.GetApplicationAuthenticationDao(&tenantID)
 	appAuth := m.ApplicationAuthentication{
 		ApplicationID:    app.ID,
 		AuthenticationID: auth.DbID,
@@ -1086,34 +798,6 @@ func TestApplicationDelete(t *testing.T) {
 	}
 }
 
-// TestApplicationDeleteInvalidTenant tests situation when the tenant tries to
-// delete existing but not owned application
-func TestApplicationDeleteInvalidTenant(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(2)
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodDelete,
-		"/api/sources/v3.1/applications/1",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationGet := ErrorHandlingContext(ApplicationDelete)
-	err := notFoundApplicationGet(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
 func TestApplicationDeleteNotFound(t *testing.T) {
 	c, rec := request.CreateTestContext(
 		http.MethodDelete,
@@ -1159,7 +843,6 @@ func TestApplicationDeleteBadRequest(t *testing.T) {
 }
 
 func TestApplicationListAuthentications(t *testing.T) {
-	tenantId := int64(1)
 	appId := int64(1)
 
 	c, rec := request.CreateTestContext(
@@ -1170,7 +853,7 @@ func TestApplicationListAuthentications(t *testing.T) {
 			"limit":    100,
 			"offset":   0,
 			"filters":  []util.Filter{},
-			"tenantID": tenantId,
+			"tenantID": int64(1),
 		},
 	)
 
@@ -1202,7 +885,7 @@ func TestApplicationListAuthentications(t *testing.T) {
 
 	var wantData []m.Authentication
 	for _, auth := range fixtures.TestAuthenticationData {
-		if auth.ResourceType == "Application" && auth.ResourceID == appId && auth.TenantID == tenantId {
+		if auth.ResourceType == "Application" && auth.ResourceID == appId {
 			wantData = append(wantData, auth)
 		}
 	}
@@ -1221,116 +904,7 @@ func TestApplicationListAuthentications(t *testing.T) {
 		}
 	}
 
-	// Check the tenancy of returned authentications
-	if !config.IsVaultOn() {
-		for _, authOut := range out.Data {
-			authOutId, err := strconv.ParseInt(authOut.(map[string]interface{})["id"].(string), 10, 64)
-			if err != nil {
-				t.Error(err)
-			}
-
-			for _, authFixtures := range fixtures.TestAuthenticationData {
-				if authOutId == authFixtures.DbID {
-					if authFixtures.TenantID != tenantId {
-						t.Errorf("expected tenant id = %d, got %d", tenantId, authFixtures.TenantID)
-					}
-				}
-			}
-		}
-	}
-
 	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
-}
-
-// TestApplicationListAuthenticationsEmptyList tests that an empty list is returned
-// when the application doesn't have an authentications
-func TestApplicationListAuthenticationsEmptyList(t *testing.T) {
-	tenantId := int64(1)
-	appId := int64(2)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications/1/authentications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("application_id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	err := ApplicationListAuthentications(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.EmptySubcollectionListTest(t, c, rec)
-}
-
-// TestApplicationListAuthenticationsTenantNotExists tests that not found err is returned
-// for not existing tenant
-func TestApplicationListAuthenticationsTenantNotExists(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := fixtures.NotExistingTenantId
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications/1/authentications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("application_id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationListAuthentications := ErrorHandlingContext(ApplicationListAuthentications)
-	err := notFoundApplicationListAuthentications(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-// TestApplicationListAuthenticationsInvalidTenant tests that not found err is returned
-// for a tenant who doesn't own the application
-func TestApplicationListAuthenticationsInvalidTenant(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(2)
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/applications/1/authentications",
-		nil,
-		map[string]interface{}{
-			"limit":    100,
-			"offset":   0,
-			"filters":  []util.Filter{},
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("application_id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationListAuthentications := ErrorHandlingContext(ApplicationListAuthentications)
-	err := notFoundApplicationListAuthentications(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
 }
 
 func TestApplicationListAuthenticationsNotFound(t *testing.T) {
@@ -1390,20 +964,18 @@ func TestApplicationListAuthenticationsBadRequest(t *testing.T) {
 // TestPauseApplication tests that an application gets successfully paused.
 func TestPauseApplication(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(1)
-	appId := int64(1)
 
 	c, rec := request.CreateTestContext(
 		http.MethodPost,
 		"/api/sources/v3.1/applications/1/pause",
 		nil,
 		map[string]interface{}{
-			"tenantID": tenantId,
+			"tenantID": int64(1),
 		},
 	)
 
 	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
+	c.SetParamValues("1")
 
 	err := ApplicationPause(c)
 	if err != nil {
@@ -1413,159 +985,25 @@ func TestPauseApplication(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Errorf(`want status "%d", got "%d"`, http.StatusNoContent, rec.Code)
 	}
-
-	// Check that the application is paused
-	applicationDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenantId})
-	app, err := applicationDao.GetById(&appId)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if app.PausedAt == nil {
-		t.Error("the application is not paused, 'paused_at' is nil")
-	}
-
-	// Unpause the application, because we want to have not affected test data for next tests
-	err = applicationDao.Unpause(appId)
-	if err != nil {
-		t.Error(err)
-	}
 }
 
-func TestPauseApplicationNotFound(t *testing.T) {
-	tenantId := int64(1)
-	appId := int64(809897868745)
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/809897868745/pause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationPause := ErrorHandlingContext(ApplicationPause)
-	err := notFoundApplicationPause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-func TestPauseApplicationBadRequest(t *testing.T) {
-	tenantId := int64(1)
-	appId := "xxx"
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/xxx/pause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(appId)
-
-	badRequestApplicationPause := ErrorHandlingContext(ApplicationPause)
-	err := badRequestApplicationPause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.BadRequestTest(t, rec)
-}
-
-// TestPauseApplicationInvalidTenant tests that not found is returned
-// when tenant tries to pause not owned application
-func TestPauseApplicationInvalidTenant(t *testing.T) {
+// TestResumeApplication tests that an application gets successfully resumed.
+func TestResumeApplication(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
-	// The application is not owned by the tenant
-	tenantId := int64(2)
-	appId := int64(1)
 
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/1/pause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationPause := ErrorHandlingContext(ApplicationPause)
-	err := notFoundApplicationPause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-// TestPauseApplicationTenantNotExists tests that not found is returned
-// for not existing tenant
-func TestPauseApplicationTenantNotExists(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := fixtures.NotExistingTenantId
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/1/pause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationPause := ErrorHandlingContext(ApplicationPause)
-	err := notFoundApplicationPause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-// TestUnpauseApplication tests that an application gets successfully unpaused.
-func TestUnpauseApplication(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := int64(1)
-	appId := int64(1)
-
-	// Test data preparation = pause the application
-	applicationDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenantId})
-	err := applicationDao.Pause(appId)
-	if err != nil {
-		t.Error(err)
-	}
-
-	// Unpause the application
 	c, rec := request.CreateTestContext(
 		http.MethodPost,
 		"/api/sources/v3.1/applications/1/unpause",
 		nil,
 		map[string]interface{}{
-			"tenantID": tenantId,
+			"tenantID": int64(1),
 		},
 	)
 
 	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
+	c.SetParamValues("1")
 
-	err = ApplicationUnpause(c)
+	err := ApplicationUnpause(c)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1573,123 +1011,6 @@ func TestUnpauseApplication(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Errorf(`want status "%d", got "%d"`, http.StatusNoContent, rec.Code)
 	}
-
-	// Check that the application is not paused
-	app, err := applicationDao.GetById(&appId)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if app.PausedAt != nil {
-		t.Error("the application is paused and the opposite is expected")
-	}
-}
-
-func TestUnpauseApplicationNotFound(t *testing.T) {
-	tenantId := int64(1)
-	appId := int64(809897868745)
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/809897868745/unpause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationUnpause := ErrorHandlingContext(ApplicationUnpause)
-	err := notFoundApplicationUnpause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-func TestUnpauseApplicationBadRequest(t *testing.T) {
-	tenantId := int64(1)
-	appId := "xxx"
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/xxx/unpause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(appId)
-
-	badRequestApplicationUnpause := ErrorHandlingContext(ApplicationUnpause)
-	err := badRequestApplicationUnpause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.BadRequestTest(t, rec)
-}
-
-// TestUnpauseApplicationInvalidTenant tests that not found is returned
-// when tenant tries to unpause not owned application
-func TestUnpauseApplicationInvalidTenant(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	// The application is not owned by the tenant
-	tenantId := int64(2)
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/1/unpause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationUnpause := ErrorHandlingContext(ApplicationUnpause)
-	err := notFoundApplicationUnpause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
-}
-
-// TestUnpauseApplicationTenantNotExists tests that not found is returned
-// for not existing tenant
-func TestUnpauseApplicationTenantNotExists(t *testing.T) {
-	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := fixtures.NotExistingTenantId
-	appId := int64(1)
-
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/applications/1/unpause",
-		nil,
-		map[string]interface{}{
-			"tenantID": tenantId,
-		},
-	)
-
-	c.SetParamNames("id")
-	c.SetParamValues(fmt.Sprintf("%d", appId))
-
-	notFoundApplicationUnpause := ErrorHandlingContext(ApplicationUnpause)
-	err := notFoundApplicationUnpause(c)
-	if err != nil {
-		t.Error(err)
-	}
-
-	templates.NotFoundTest(t, rec)
 }
 
 // TestPauseApplicationPauseRaiseEventCheck tests that a proper "raise event" is raised when a source is paused.
@@ -2137,26 +1458,4 @@ func TestApplicationEditPausedUnitInvalidFields(t *testing.T) {
 
 	// Restore the binder to not affect any other tests.
 	c.Echo().Binder = backupBinder
-}
-
-// HELPERS:
-
-// checkAllApplicationsBelongToTenant checks that all returned apps belongs to given tenant
-func checkAllApplicationsBelongToTenant(tenantId int64, apps []interface{}) error {
-	// For every returned app
-	for _, appOut := range apps {
-		appOutId, err := strconv.ParseInt(appOut.(map[string]interface{})["id"].(string), 10, 64)
-		if err != nil {
-			return err
-		}
-		// find the app in fixtures and check the tenant id
-		for _, app := range fixtures.TestApplicationData {
-			if appOutId == app.ID {
-				if app.TenantID != tenantId {
-					return fmt.Errorf("expected tenant id = %d, got %d", tenantId, app.TenantID)
-				}
-			}
-		}
-	}
-	return nil
 }

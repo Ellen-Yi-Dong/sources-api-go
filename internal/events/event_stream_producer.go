@@ -1,21 +1,17 @@
 package events
 
 import (
-	"fmt"
-
 	c "github.com/RedHatInsights/sources-api-go/config"
+	"github.com/RedHatInsights/sources-api-go/dao"
 	"github.com/RedHatInsights/sources-api-go/kafka"
 	logging "github.com/RedHatInsights/sources-api-go/logger"
 	m "github.com/RedHatInsights/sources-api-go/model"
 	"github.com/RedHatInsights/sources-api-go/util"
 )
 
-const eventStreamRequestedTopic = "platform.sources.event-stream"
+const EventStreamTopic = "platform.sources.event-stream"
 
-var (
-	config           = c.Get()
-	eventStreamTopic = config.KafkaTopic(eventStreamRequestedTopic)
-)
+var config = c.Get()
 
 type EventStreamProducer struct {
 	Sender
@@ -29,16 +25,14 @@ type EventStreamSender struct {
 }
 
 func (esp *EventStreamSender) RaiseEvent(eventType string, payload []byte, headers []kafka.Header) error {
-	logging.Log.Debugf("publishing message %v to topic %q...", eventType, eventStreamTopic)
+	logging.Log.Debugf("publishing message %v to topic %q...", eventType, EventStreamTopic)
 
-	kf, err := kafka.GetWriter(&config.KafkaBrokerConfig, eventStreamTopic)
-	if err != nil {
-		return fmt.Errorf(`unable to create a Kafka writer to raise an event: %w`, err)
-	}
-
-	defer kafka.CloseWriter(kf, "raise event")
+	producerConfig := kafka.ProducerConfig{Topic: config.KafkaTopic(EventStreamTopic)}
+	kafkaConfig := kafka.Config{KafkaBrokers: config.KafkaBrokers, ProducerConfig: producerConfig}
+	kf := &kafka.Manager{Config: kafkaConfig}
 
 	m := &kafka.Message{}
+
 	for index, header := range headers {
 		if header.Key == "event_type" {
 			headers[index] = kafka.Header{Key: "event_type", Value: []byte(eventType)}
@@ -50,13 +44,14 @@ func (esp *EventStreamSender) RaiseEvent(eventType string, payload []byte, heade
 	m.AddHeaders(headers)
 	m.AddValue(payload)
 
-	if err := kafka.Produce(kf, m); err != nil {
+	err := kf.Produce(m)
+	if err != nil {
 		return err
 	}
 
-	logging.Log.Debugf("publishing message %v to topic %q...Complete", eventType, eventStreamTopic)
+	logging.Log.Debugf("publishing message %v to topic %q...Complete", eventType, EventStreamTopic)
 
-	return nil
+	return kf.Producer().Close()
 }
 
 func (esp *EventStreamProducer) RaiseEventIf(allowed bool, eventType string, payload []byte, headers []kafka.Header) error {
@@ -67,8 +62,13 @@ func (esp *EventStreamProducer) RaiseEventIf(allowed bool, eventType string, pay
 	return nil
 }
 
-func (esp *EventStreamProducer) RaiseEventForUpdate(eventModelDao m.EventModelDao, resource util.Resource, updateAttributes []string, headers []kafka.Header) error {
+func (esp *EventStreamProducer) RaiseEventForUpdate(resource util.Resource, updateAttributes []string, headers []kafka.Header) error {
 	allowed := esp.RaiseEventAllowed(resource.ResourceType, updateAttributes)
+	eventModelDao, err := dao.GetFromResourceType(resource.ResourceType)
+	if err != nil {
+		return err
+	}
+
 	resourceJSON, err := eventModelDao.ToEventJSON(resource)
 	if err != nil {
 		return err

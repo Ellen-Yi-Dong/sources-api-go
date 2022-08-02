@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/RedHatInsights/sources-api-go/config"
@@ -70,12 +69,10 @@ type notificationMessage struct {
 }
 
 func (producer *AvailabilityStatusNotifier) EmitAvailabilityStatusNotification(id *identity.Identity, emailNotificationInfo *m.EmailNotificationInfo) error {
-	writer, err := kafka.GetWriter(&conf.KafkaBrokerConfig, notificationTopic)
-	if err != nil {
-		return fmt.Errorf(`could not get Kafka writer to emit an availability status notification: %w`, err)
-	}
-
-	defer kafka.CloseWriter(writer, "emit availability status notification")
+	mgr := &kafka.Manager{Config: kafka.Config{
+		KafkaBrokers:   config.Get().KafkaBrokers,
+		ProducerConfig: kafka.ProducerConfig{Topic: notificationTopic},
+	}}
 
 	context, err := json.Marshal(emailNotificationInfo)
 	if err != nil {
@@ -106,18 +103,17 @@ func (producer *AvailabilityStatusNotifier) EmitAvailabilityStatusNotification(i
 	})
 
 	if err != nil {
-		l.Log.Warnf("Failed to add struct value as json to kafka message: %v", err)
+		l.Log.Warnf("Failed to add struct value as json to kafka message: %s", err.Error())
 		return err
 	}
 
-	if err := kafka.Produce(writer, msg); err != nil {
-		err := fmt.Errorf("failed to produce Kafka message to emit notification: %v, error: %s", statusEventType, err)
-
-		l.Log.Warn(err)
+	err = mgr.Produce(msg)
+	if err != nil {
+		l.Log.Warnf("Failed to produce kafka message to emit notification: %v, error: %v", statusEventType, err)
 		return err
 	}
 
-	return nil
+	return mgr.Producer().Close()
 }
 
 func EmitAvailabilityStatusNotification(id *identity.Identity, emailNotificationInfo *m.EmailNotificationInfo) error {

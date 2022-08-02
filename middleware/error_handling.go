@@ -23,14 +23,8 @@ func HandleErrors(next echo.HandlerFunc) echo.HandlerFunc {
 				statusCode = http.StatusBadRequest
 				message = util.ErrorDocWithoutLogging(err.Error(), "400")
 			default:
-				c.Logger().Error(err)
-				uuid, ok := c.Get("uuid").(string)
-				if !ok {
-					uuid = ""
-				}
-
 				statusCode = http.StatusInternalServerError
-				message = util.ErrorDocWithRequestId(fmt.Sprintf("Internal Server Error: %v", err.Error()), "500", uuid)
+				message = util.ErrorDoc(fmt.Sprintf("Internal Server Error: %v", err.Error()), "500")
 			}
 			return c.JSON(statusCode, message)
 		}

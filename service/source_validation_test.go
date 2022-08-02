@@ -68,21 +68,13 @@ func TestInvalidDuplicatedNameInTenant(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 
 	sourceName := "Source350"
-	sourceUid := "abcde-fghijk"
-	newSource := model.Source{ID: 350, Name: sourceName, SourceTypeID: 1, TenantID: 1, Uid: &sourceUid}
-	err := dao.DB.
-		Debug().
-		Create(&newSource).
-		Error
-
-	if err != nil {
-		t.Errorf(`could not create the source fixture for the test: %s`, err)
-	}
+	newSource := model.Source{ID: 350, Name: sourceName, SourceTypeID: 1, TenantID: 1}
+	dao.DB.Create(&newSource)
 
 	request := setUp()
 	request.Name = &sourceName
 
-	err = ValidateSourceCreationRequest(sourceDao, &request)
+	err := ValidateSourceCreationRequest(sourceDao, &request)
 
 	if err == nil {
 		t.Errorf("Error expected, got none")

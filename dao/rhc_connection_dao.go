@@ -207,11 +207,7 @@ func (s *rhcConnectionDaoImpl) Create(rhcConnection *m.RhcConnection) (*m.RhcCon
 }
 
 func (s *rhcConnectionDaoImpl) Update(rhcConnection *m.RhcConnection) error {
-	err := DB.
-		Debug().
-		// We need to use the "Omit" clause since otherwise Gorm tries to create the associate source for the
-		// connection as well.
-		Omit(clause.Associations).
+	err := DB.Debug().
 		Updates(rhcConnection).
 		Error
 	return err
@@ -219,12 +215,6 @@ func (s *rhcConnectionDaoImpl) Update(rhcConnection *m.RhcConnection) error {
 
 func (s *rhcConnectionDaoImpl) Delete(id *int64) (*m.RhcConnection, error) {
 	var rhcConnection m.RhcConnection
-
-	// Check if rhc connection exists for given tenant
-	_, err := s.GetById(id)
-	if err != nil {
-		return nil, err
-	}
 
 	// The foreign key and the "cascade on delete" in the join table takes care of deleting the related
 	// "source_rhc_connection" row.
@@ -236,6 +226,10 @@ func (s *rhcConnectionDaoImpl) Delete(id *int64) (*m.RhcConnection, error) {
 
 	if result.Error != nil {
 		return nil, fmt.Errorf(`failed to delete rhcConnection with id "%d": %s`, id, result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return nil, util.NewErrNotFound("rhcConnection")
 	}
 
 	return &rhcConnection, nil

@@ -101,7 +101,6 @@ func (src *Source) ToInternalResponse() *SourceInternalResponse {
 		Id:                 &id,
 		AvailabilityStatus: &src.AvailabilityStatus,
 		ExternalTenant:     &src.Tenant.ExternalTenant,
-		OrgId:              &src.Tenant.OrgID,
 	}
 
 	return source

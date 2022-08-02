@@ -114,9 +114,7 @@ func TestSystemClusterID(t *testing.T) {
 			"x-rh-identity": "dummy",
 			"identity": &identity.XRHID{
 				Identity: identity.Identity{
-					System: identity.System{
-						ClusterId: "test_cluster",
-					},
+					System: map[string]interface{}{"cluster_id": "test_cluster"},
 				},
 			},
 		},
@@ -141,9 +139,7 @@ func TestSystemCN(t *testing.T) {
 			"x-rh-identity": "dummy",
 			"identity": &identity.XRHID{
 				Identity: identity.Identity{
-					System: identity.System{
-						CommonName: "test_cert",
-					},
+					System: map[string]interface{}{"cn": "test_cert"},
 				},
 			},
 		},
@@ -168,9 +164,7 @@ func TestSystemPatch(t *testing.T) {
 			"x-rh-identity": "dummy",
 			"identity": &identity.XRHID{
 				Identity: identity.Identity{
-					System: identity.System{
-						CommonName: "test_cert",
-					},
+					System: map[string]interface{}{"cn": "test_cert"},
 				},
 			},
 		},
@@ -195,9 +189,7 @@ func TestSystemDelete(t *testing.T) {
 			"x-rh-identity": "dummy",
 			"identity": &identity.XRHID{
 				Identity: identity.Identity{
-					System: identity.System{
-						CommonName: "test_cert",
-					},
+					System: map[string]interface{}{"cn": "test_cert"},
 				},
 			},
 		},
@@ -222,9 +214,7 @@ func TestSystemDeleteSource(t *testing.T) {
 			"x-rh-identity": "dummy",
 			"identity": &identity.XRHID{
 				Identity: identity.Identity{
-					System: identity.System{
-						CommonName: "test_cert",
-					},
+					System: map[string]interface{}{"cn": "test_cert"},
 				},
 			},
 		},
@@ -249,9 +239,7 @@ func TestSystemDeleteSourceVersioned(t *testing.T) {
 			"x-rh-identity": "dummy",
 			"identity": &identity.XRHID{
 				Identity: identity.Identity{
-					System: identity.System{
-						CommonName: "test_cert",
-					},
+					System: map[string]interface{}{"cn": "test_cert"},
 				},
 			},
 		},
