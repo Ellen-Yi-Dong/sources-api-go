@@ -31,8 +31,6 @@ import (
 	"github.com/redhatinsights/platform-go-middlewares/identity"
 )
 
-var notExistingTenantId = int64(309832948930)
-
 func TestSourceListAuthentications(t *testing.T) {
 	originalSecretStore := conf.SecretStore
 	tenantId := int64(1)
@@ -161,7 +159,7 @@ func TestSourceListAuthenticationsEmptyList(t *testing.T) {
 // for not existing tenant
 func TestSourceListAuthenticationsTenantNotExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := notExistingTenantId
+	tenantId := fixtures.NotExistingTenantId
 	sourceId := int64(1)
 
 	c, rec := request.CreateTestContext(
@@ -347,7 +345,7 @@ func TestSourceTypeSourceSubcollectionListTenantNotExists(t *testing.T) {
 	// Check existing source type with not existing tenant id
 	// Expected is empty list
 	sourceTypeId := int64(1)
-	tenantId := notExistingTenantId
+	tenantId := fixtures.NotExistingTenantId
 
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
@@ -551,7 +549,7 @@ func TestApplicationTypeListSourceSubcollectionListTenantNotExists(t *testing.T)
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	// Check existing application type with not existing tenant id
 	appTypeId := int64(1)
-	tenantId := notExistingTenantId
+	tenantId := fixtures.NotExistingTenantId
 
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
@@ -764,7 +762,7 @@ func TestSourceListTenantNotExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	// For not existing tenant is expected that returned value
 	// will be empty list and return code 200
-	tenantId := notExistingTenantId
+	tenantId := fixtures.NotExistingTenantId
 
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
@@ -970,7 +968,7 @@ func TestSourceGetInvalidTenant(t *testing.T) {
 // not existing tenant
 func TestSourceGetTenantNotExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
-	tenantId := notExistingTenantId
+	tenantId := fixtures.NotExistingTenantId
 	sourceId := int64(1)
 
 	c, rec := request.CreateTestContext(
@@ -1134,6 +1132,9 @@ func TestSourceCreate(t *testing.T) {
 }
 
 func TestSourceEdit(t *testing.T) {
+	tenant := fixtures.TestTenantData[0]
+	source := fixtures.TestSourceData[0]
+
 	backupNotificationProducer := service.NotificationProducer
 	service.NotificationProducer = &mocks.MockAvailabilityStatusNotificationProducer{}
 
@@ -1150,14 +1151,14 @@ func TestSourceEdit(t *testing.T) {
 		"/api/sources/v3.1/sources/1",
 		bytes.NewReader(body),
 		map[string]interface{}{
-			"tenantID": int64(1),
+			"tenantID": tenant.Id,
 		},
 	)
 
 	c.SetParamNames("id")
-	c.SetParamValues("1")
+	c.SetParamValues(fmt.Sprintf("%d", source.ID))
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
-	c.Set("identity", &identity.XRHID{Identity: identity.Identity{AccountNumber: fixtures.TestTenantData[0].ExternalTenant}})
+	c.Set("identity", &identity.XRHID{Identity: identity.Identity{AccountNumber: tenant.ExternalTenant}})
 
 	sourceEditHandlerWithNotifier := middleware.Notifier(SourceEdit)
 	err := sourceEditHandlerWithNotifier(c)
@@ -1193,8 +1194,8 @@ func TestSourceEdit(t *testing.T) {
 		CurrentAvailabilityStatus:  "unavailable",
 		PreviousAvailabilityStatus: "available",
 		SourceName:                 newSourceName,
-		SourceID:                   strconv.FormatInt(fixtures.TestSourceData[0].ID, 10),
-		TenantID:                   strconv.FormatInt(fixtures.TestSourceData[0].TenantID, 10),
+		SourceID:                   strconv.FormatInt(source.ID, 10),
+		TenantID:                   strconv.FormatInt(source.TenantID, 10),
 	}
 
 	if !cmp.Equal(emailNotificationInfo, notificationProducer.EmailNotificationInfo) {
@@ -1203,6 +1204,43 @@ func TestSourceEdit(t *testing.T) {
 	}
 
 	service.NotificationProducer = backupNotificationProducer
+}
+
+// TestSourceEditInvalidTenant tests situation when the tenant tries to
+// edit existing not owned source
+func TestSourceEditInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(2)
+	sourceId := int64(1)
+
+	newSourceName := "New source name"
+	req := m.SourceEditRequest{
+		Name:               util.StringRef(newSourceName),
+		AvailabilityStatus: util.StringRef("available"),
+	}
+
+	body, _ := json.Marshal(req)
+
+	c, rec := request.CreateTestContext(
+		http.MethodPatch,
+		"/api/sources/v3.1/sources/8937498374",
+		bytes.NewReader(body),
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+
+	notFoundSourceEdit := ErrorHandlingContext(SourceEdit)
+	err := notFoundSourceEdit(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
 }
 
 func TestSourceEditNotFound(t *testing.T) {
@@ -1269,21 +1307,158 @@ func TestSourceEditBadRequest(t *testing.T) {
 
 func TestSourceDelete(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
+	testutils.SkipIfNotSecretStoreDatabase(t)
+
+	// SourceDelete() uses cascade delete - this test creates own data
+	// and checks that all related objects were deleted (app auths, apps,
+	// endpoints, rhc connections and source itself)
+
+	// List for all created authentications
+	var auths []m.Authentication
+
+	// Create a source
+
+	tenantID := int64(1)
+	sourceDaoParams := dao.RequestParams{TenantID: &tenantID}
+	sourceDao := dao.GetSourceDao(&sourceDaoParams)
+
+	uid := "bd2ba6d6-4630-40e2-b829-cf09b03bdb9f"
+	src := m.Source{
+		Name:         "Source for TestApplicationDelete()",
+		SourceTypeID: 1,
+		Uid:          &uid,
+	}
+
+	err := sourceDao.Create(&src)
+	if err != nil {
+		t.Errorf("source not created correctly: %s", err)
+	}
+
+	// Create and authentication for source
+	authDaoParams := dao.RequestParams{TenantID: &tenantID}
+	authenticationDao := dao.GetAuthenticationDao(&authDaoParams)
+
+	authNameForSource := "authentication for source"
+	auth := m.Authentication{
+		Name:         &authNameForSource,
+		ResourceType: "Source",
+		ResourceID:   src.ID,
+		TenantID:     tenantID,
+		SourceID:     src.ID,
+	}
+
+	err = authenticationDao.Create(&auth)
+	if err != nil {
+		t.Errorf("authentication for source not created correctly: %s", err)
+	}
+
+	auths = append(auths, auth)
+
+	// Create an application
+	applicationDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenantID})
+
+	app := m.Application{
+		SourceID:          src.ID,
+		ApplicationTypeID: 1,
+		Extra:             []byte(`{"Name": "app for TestApplicationDelete()"}`),
+	}
+
+	err = applicationDao.Create(&app)
+	if err != nil {
+		t.Errorf("application not created correctly: %s", err)
+	}
+
+	// Create an authentication for application
+	authNameForApp := "authentication for application"
+	auth = m.Authentication{
+		Name:         &authNameForApp,
+		ResourceType: "Application",
+		ResourceID:   app.ID,
+		TenantID:     tenantID,
+		SourceID:     src.ID,
+	}
+
+	err = authenticationDao.Create(&auth)
+	if err != nil {
+		t.Errorf("authentication for application not created correctly: %s", err)
+	}
+
+	auths = append(auths, auth)
+
+	// Create an application authentication
+	appAuthDao := dao.GetApplicationAuthenticationDao(&dao.RequestParams{TenantID: &tenantID})
+	appAuth := m.ApplicationAuthentication{
+		ApplicationID:    app.ID,
+		AuthenticationID: auth.DbID,
+	}
+
+	err = appAuthDao.Create(&appAuth)
+	if err != nil {
+		t.Errorf("application authentication not created correctly: %s", err)
+	}
+
+	// Create an endpoint
+	endpointDao := dao.GetEndpointDao(&tenantID)
+
+	role := "new role"
+	endpoint := m.Endpoint{
+		SourceID: src.ID,
+		TenantID: tenantID,
+		Role:     &role,
+	}
+
+	err = endpointDao.Create(&endpoint)
+	if err != nil {
+		t.Errorf("endpoint not created correctly: %s", err)
+	}
+
+	// Create an authentication for endpoint
+	authNameForEndpoint := "authentication for endpoint"
+	auth = m.Authentication{
+		Name:         &authNameForEndpoint,
+		ResourceType: "Endpoint",
+		ResourceID:   endpoint.ID,
+		TenantID:     tenantID,
+		SourceID:     src.ID,
+	}
+
+	err = authenticationDao.Create(&auth)
+	if err != nil {
+		t.Errorf("authentication for endpoint not created correctly: %s", err)
+	}
+
+	auths = append(auths, auth)
+
+	// Create a rhc connection
+	rhcConnectionDao := dao.GetRhcConnectionDao(&tenantID)
+
+	rhc := &m.RhcConnection{
+		RhcId:   "123e4567-e89b-12d3-a456-426614174000",
+		Sources: []m.Source{src},
+	}
+
+	rhc, err = rhcConnectionDao.Create(rhc)
+	if err != nil {
+		t.Errorf("rhc connection not created correctly: %s", err)
+	}
+
+	// Create test context and call the SourceDelete()
+	id := fmt.Sprintf("%d", src.ID)
 
 	c, rec := request.CreateTestContext(
 		http.MethodDelete,
-		"/api/sources/v3.1/sources/100",
+		"/api/sources/v3.1/sources/"+id,
 		nil,
 		map[string]interface{}{
-			"tenantID": int64(1),
+			"tenantID": tenantID,
 		},
 	)
 
 	c.SetParamNames("id")
-	c.SetParamValues("100")
+	c.SetParamValues(id)
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 
-	err := SourceDelete(c)
+	err = SourceDelete(c)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1292,21 +1467,75 @@ func TestSourceDelete(t *testing.T) {
 		t.Errorf("Wrong return code, expected %v got %v", http.StatusNoContent, rec.Code)
 	}
 
-	// Check that source doesn't exist.
-	c, rec = request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/sources/100",
+	// Check that source doesn't exist
+	_, err = sourceDao.GetById(&src.ID)
+	if !errors.Is(err, util.ErrNotFoundEmpty) {
+		t.Errorf("expected 'source not found', got %s", err)
+	}
+
+	// Check that application doesn't exist
+	_, err = applicationDao.GetById(&app.ID)
+	if !errors.Is(err, util.ErrNotFoundEmpty) {
+		t.Errorf("expected 'application not found', got %s", err)
+	}
+
+	// Check that application authentication doesn't exist
+	_, err = appAuthDao.GetById(&appAuth.ID)
+	if !errors.Is(err, util.ErrNotFoundEmpty) {
+		t.Errorf("expected 'application authentication not found', got %s", err)
+	}
+
+	// Check that endpoint doesn't exist
+	_, err = endpointDao.GetById(&endpoint.ID)
+	if !errors.Is(err, util.ErrNotFoundEmpty) {
+		t.Errorf("expected 'endpoint not found', got %s", err)
+	}
+
+	// Check that rhc connection doesn't exist
+	_, err = rhcConnectionDao.GetById(&rhc.ID)
+	if !errors.Is(err, util.ErrNotFoundEmpty) {
+		t.Errorf("expected 'rhc connection not found', got %s", err)
+	}
+
+	// Check that relation "source - rhc connection" doesn't exist
+	var out []m.RhcConnection
+	out, _, _ = rhcConnectionDao.ListForSource(&src.ID, 100, 0, []util.Filter{})
+	for _, r := range out {
+		if r.ID == rhc.ID {
+			t.Errorf("rhc connection with id = %d should not exist", rhc.ID)
+		}
+	}
+
+	// Check that all authentications don't exist
+	for _, a := range auths {
+		_, err = authenticationDao.GetById(a.ID)
+		if !errors.Is(err, util.ErrNotFoundEmpty) {
+			t.Errorf("expected 'authentication not found', got %s", err)
+		}
+	}
+}
+
+// TestSourceDeleteInvalidTenant tests situation when the tenant tries to
+// delete existing but not owned source
+func TestSourceDeleteInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(2)
+	sourceId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodDelete,
+		"/api/sources/v3.1/sources/9038049384",
 		nil,
 		map[string]interface{}{
-			"tenantID": int64(1),
+			"tenantID": tenantId,
 		},
 	)
 
 	c.SetParamNames("id")
-	c.SetParamValues("100")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
 
-	notFoundSourceGet := ErrorHandlingContext(SourceGet)
-	err = notFoundSourceGet(c)
+	notFoundSourceDelete := ErrorHandlingContext(SourceDelete)
+	err := notFoundSourceDelete(c)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1381,6 +1610,34 @@ func TestAvailabilityStatusCheck(t *testing.T) {
 	}
 }
 
+// TestAvailabilityStatusCheckInvalidTenant tests availability status check
+// with a tenant who doesn't own the source
+func TestAvailabilityStatusCheckInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(2)
+	sourceId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/183209745/check_availability",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourceCheckAvailability := ErrorHandlingContext(SourceCheckAvailability)
+	err := notFoundSourceCheckAvailability(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
 func TestAvailabilityStatusCheckNotFound(t *testing.T) {
 	c, rec := request.CreateTestContext(
 		http.MethodPost,
@@ -1425,7 +1682,7 @@ func TestAvailabilityStatusCheckBadRequest(t *testing.T) {
 	templates.BadRequestTest(t, rec)
 }
 
-func TestSourcesGetRelatedRhcConnectionsTest(t *testing.T) {
+func TestSourcesGetRelatedRhcConnections(t *testing.T) {
 	sourceId := "1"
 
 	c, rec := request.CreateTestContext(
@@ -1485,7 +1742,68 @@ func TestSourcesGetRelatedRhcConnectionsTest(t *testing.T) {
 	}
 }
 
-func TestSourcesGetRelatedRhcConnectionsTestBadRequestNotFound(t *testing.T) {
+// TestSourcesGetRelatedRhcConnectionsEmptyList tests that you get empty list
+// for source without rhc-connections
+func TestSourcesGetRelatedRhcConnectionsEmptyList(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(1)
+	sourceId := int64(4)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/sources/4/rhc_connections",
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	err := SourcesRhcConnectionList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.EmptySubcollectionListTest(t, c, rec)
+}
+
+// TestSourcesGetRelatedRhcConnectionsInvalidTenant tests scenario with existing source
+// (with existing rhc-connections) but tenant is not owner of this source
+func TestSourcesGetRelatedRhcConnectionsInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(2)
+	sourceId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/sources/1/rhc_connections",
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourcesRhcConnectionList := ErrorHandlingContext(SourcesRhcConnectionList)
+	err := notFoundSourcesRhcConnectionList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+func TestSourcesGetRelatedRhcConnectionsNotFound(t *testing.T) {
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
 		"/api/sources/v3.1/sources/0394830498/rhc_connections",
@@ -1510,7 +1828,7 @@ func TestSourcesGetRelatedRhcConnectionsTestBadRequestNotFound(t *testing.T) {
 	templates.NotFoundTest(t, rec)
 }
 
-func TestSourcesGetRelatedRhcConnectionsTestBadRequestInvalidSyntax(t *testing.T) {
+func TestSourcesGetRelatedRhcConnectionsBadRequestInvalidSyntax(t *testing.T) {
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
 		"/api/sources/v3.1/sources/xxx/rhc_connections",
@@ -1535,7 +1853,7 @@ func TestSourcesGetRelatedRhcConnectionsTestBadRequestInvalidSyntax(t *testing.T
 	templates.BadRequestTest(t, rec)
 }
 
-func TestSourcesGetRelatedRhcConnectionsTestBadRequestInvalidFilter(t *testing.T) {
+func TestSourcesGetRelatedRhcConnectionsBadRequestInvalidFilter(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 
 	c, rec := request.CreateTestContext(
@@ -1568,19 +1886,20 @@ func TestSourcesGetRelatedRhcConnectionsTestBadRequestInvalidFilter(t *testing.T
 // itself as paused, by modifying their "paused_at" column.
 func TestPauseSourceAndItsApplications(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(1)
+	sourceId := int64(1)
 
 	c, rec := request.CreateTestContext(
 		http.MethodPost,
 		"/api/sources/v3.1/sources/1/pause",
 		nil,
 		map[string]interface{}{
-			"tenantID":      int64(1),
-			"x-rh-identity": util.GeneratedXRhIdentity("1234", "1234"),
+			"tenantID": tenantId,
 		},
 	)
 
 	c.SetParamNames("source_id")
-	c.SetParamValues("1")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
 
 	err := SourcePause(c)
 	if err != nil {
@@ -1590,27 +1909,176 @@ func TestPauseSourceAndItsApplications(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Errorf(`want status "%d", got "%d"`, http.StatusNoContent, rec.Code)
 	}
+
+	// Check that the source is paused
+	daoParams := dao.RequestParams{TenantID: &tenantId}
+	sourceDao := dao.GetSourceDao(&daoParams)
+	src, err := sourceDao.GetById(&sourceId)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if src.PausedAt == nil {
+		t.Error("the source is not paused => 'paused_at' is nil and the opposite is expected")
+	}
+
+	// Check that paused source belongs to desired tenant
+	if src.TenantID != tenantId {
+		t.Errorf("expected tenant %d, got %d", tenantId, src.TenantID)
+	}
+
+	// Check that relation applications are paused and belongs to desired tenant
+	appDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenantId})
+	apps, _, err := appDao.SubCollectionList(m.Source{ID: sourceId}, 100, 0, nil)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, a := range apps {
+		if a.PausedAt == nil {
+			t.Errorf("application with id = %d is not paused and the opposite is expected", a.ID)
+		}
+		if a.TenantID != tenantId {
+			t.Errorf("expected tenant %d, got %d", tenantId, a.TenantID)
+		}
+	}
+
+	// Unpause the Source and its applications to not have affected test data for next tests
+	err = sourceDao.Unpause(sourceId)
+	if err != nil {
+		t.Error(err)
+	}
 }
 
-// TestResumeSourceAndItsApplications tests that the "unpause source" endpoint sets all the applications and the source
-// itself as resumed, by setting their "paused_at" column as "NULL".
-func TestResumeSourceAndItsApplications(t *testing.T) {
+// TestPauseSourceAndItsApplicationsInvalidTenant tests that not found is returned
+// when tenant tries to pause not owned source
+func TestPauseSourceAndItsApplicationsInvalidTenant(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
+	// The source is not owned by the tenant
+	tenantId := int64(2)
+	sourceId := int64(1)
 
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/1/pause",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourcePause := ErrorHandlingContext(SourcePause)
+	err := notFoundSourcePause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestPauseSourceAndItsApplicationsTenantNotExists tests that not found is returned
+// for not existing tenant
+func TestPauseSourceAndItsApplicationsTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+	sourceId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/1/pause",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourcePause := ErrorHandlingContext(SourcePause)
+	err := notFoundSourcePause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+func TestPauseSourceAndItsApplicationsNotFound(t *testing.T) {
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/809897868745/pause",
+		nil,
+		map[string]interface{}{
+			"tenantID": int64(1),
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues("809897868745")
+
+	notFoundSourcePause := ErrorHandlingContext(SourcePause)
+	err := notFoundSourcePause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+func TestPauseSourceAndItsApplicationsBadRequest(t *testing.T) {
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/xxx/pause",
+		nil,
+		map[string]interface{}{
+			"tenantID": int64(1),
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues("xxx")
+
+	badRequestSourcePause := ErrorHandlingContext(SourcePause)
+	err := badRequestSourcePause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.BadRequestTest(t, rec)
+}
+
+// TestUnpauseSourceAndItsApplications tests that the "unpause source" endpoint sets all the applications and the source
+// itself as not paused, by setting their "paused_at" column as "NULL".
+func TestUnpauseSourceAndItsApplications(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(1)
+	sourceId := int64(1)
+
+	// Test data preparation = pause the source and its apps
+	daoParams := dao.RequestParams{TenantID: &tenantId}
+	sourceDao := dao.GetSourceDao(&daoParams)
+	err := sourceDao.Pause(sourceId)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Unpause the source and its applications
 	c, rec := request.CreateTestContext(
 		http.MethodPost,
 		"/api/sources/v3.1/sources/1/unpause",
 		nil,
 		map[string]interface{}{
-			"tenantID":      int64(1),
-			"x-rh-identity": util.GeneratedXRhIdentity("1234", "1234"),
+			"tenantID": tenantId,
 		},
 	)
 
 	c.SetParamNames("source_id")
-	c.SetParamValues("1")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
 
-	err := SourceUnpause(c)
+	err = SourceUnpause(c)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1618,6 +2086,143 @@ func TestResumeSourceAndItsApplications(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Errorf(`want status "%d", got "%d"`, http.StatusNoContent, rec.Code)
 	}
+
+	// Check that the source is not paused
+	src, err := sourceDao.GetById(&sourceId)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if src.PausedAt != nil {
+		t.Error("the source is paused and the opposite is expected")
+	}
+
+	// Check that the source belongs to desired tenant
+	if src.TenantID != tenantId {
+		t.Errorf("expected tenant %d, got %d", tenantId, src.TenantID)
+	}
+
+	// Check that related applications are not paused and belongs to the desired tenant
+	appDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenantId})
+	apps, _, err := appDao.SubCollectionList(m.Source{ID: sourceId}, 100, 0, nil)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, a := range apps {
+		if a.PausedAt != nil {
+			t.Errorf("application with id = %d is paused and the opposite is expected", a.ID)
+		}
+		if a.TenantID != tenantId {
+			t.Errorf("expected tenant %d, got %d", tenantId, a.TenantID)
+		}
+	}
+}
+
+// TestUnpauseSourceAndItsApplicationsInvalidTenant tests that not found is returned
+// when tenant tries to unpause not owned source
+func TestUnpauseSourceAndItsApplicationsInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	// The source is not owned by the tenant
+	tenantId := int64(2)
+	sourceId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/1/unpause",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourceUnpause := ErrorHandlingContext(SourceUnpause)
+	err := notFoundSourceUnpause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestUnpauseSourceAndItsApplicationsTenantNotExists tests that not found is returned
+// for not existing tenant
+func TestUnpauseSourceAndItsApplicationsTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+	sourceId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/1/unpause",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourceUnpause := ErrorHandlingContext(SourceUnpause)
+	err := notFoundSourceUnpause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+func TestUnpauseSourceAndItsApplicationsNotFound(t *testing.T) {
+	tenantId := int64(1)
+	sourceId := int64(1789896785)
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/1/unpause",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(fmt.Sprintf("%d", sourceId))
+
+	notFoundSourceUnpause := ErrorHandlingContext(SourceUnpause)
+	err := notFoundSourceUnpause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+func TestUnpauseSourceAndItsApplicationsBadRequest(t *testing.T) {
+	tenantId := int64(1)
+	sourceId := "xxx"
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/sources/xxx/unpause",
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("source_id")
+	c.SetParamValues(sourceId)
+
+	notFoundSourceUnpause := ErrorHandlingContext(SourceUnpause)
+	err := notFoundSourceUnpause(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.BadRequestTest(t, rec)
 }
 
 // MockSender is just a mock which will allow us to control how the "RaiseEvent" function gets executed.

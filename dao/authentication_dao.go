@@ -1,6 +1,7 @@
 package dao
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,17 +26,29 @@ const vaultSecretPathFormat = "secret/data/%d/%s_%d_%s"
 
 // GetAuthenticationDao is a function definition that can be replaced in runtime in case some other DAO provider is
 // needed.
-var GetAuthenticationDao func(*int64) AuthenticationDao
+var GetAuthenticationDao func(daoParams *RequestParams) AuthenticationDao
 
 // getDefaultAuthenticationDao gets the default DAO implementation which will have the given tenant ID.
-func getDefaultAuthenticationDao(tenantId *int64) AuthenticationDao {
+func getDefaultAuthenticationDao(daoParams *RequestParams) AuthenticationDao {
+	var tenantID, userID *int64
+	var ctx context.Context
+	if daoParams != nil && daoParams.TenantID != nil {
+		tenantID = daoParams.TenantID
+		userID = daoParams.UserID
+		ctx = daoParams.ctx
+	}
+
 	if config.IsVaultOn() {
 		return &authenticationDaoImpl{
-			TenantID: tenantId,
+			TenantID: tenantID,
+			UserID:   userID,
+			ctx:      ctx,
 		}
 	} else {
 		return &authenticationDaoDbImpl{
-			TenantID: tenantId,
+			TenantID: tenantID,
+			UserID:   userID,
+			ctx:      ctx,
 		}
 	}
 }
@@ -47,6 +60,8 @@ func init() {
 
 type authenticationDaoImpl struct {
 	TenantID *int64
+	UserID   *int64
+	ctx      context.Context
 }
 
 /*
@@ -92,7 +107,7 @@ func (a *authenticationDaoImpl) List(limit int, offset int, filters []util.Filte
 
 func (a *authenticationDaoImpl) ListForSource(sourceID int64, _, _ int, _ []util.Filter) ([]m.Authentication, int64, error) {
 	// Check if sourceID exists
-	_, err := GetSourceDao(a.TenantID).GetById(&sourceID)
+	_, err := GetSourceDao(&RequestParams{TenantID: a.TenantID}).GetById(&sourceID)
 	if err != nil {
 		return nil, 0, util.NewErrNotFound("source")
 	}
@@ -120,7 +135,7 @@ func (a *authenticationDaoImpl) ListForSource(sourceID int64, _, _ int, _ []util
 
 func (a *authenticationDaoImpl) ListForApplication(applicationID int64, _, _ int, _ []util.Filter) ([]m.Authentication, int64, error) {
 	// checking if application exists first
-	_, err := GetApplicationDao(a.TenantID).GetById(&applicationID)
+	_, err := GetApplicationDao(&RequestParams{TenantID: a.TenantID, UserID: a.UserID}).GetById(&applicationID)
 	if err != nil {
 		return nil, 0, util.NewErrNotFound("application")
 	}
@@ -551,7 +566,6 @@ func (a *authenticationDaoImpl) BulkMessage(resource util.Resource) (map[string]
 }
 
 func (a *authenticationDaoImpl) FetchAndUpdateBy(resource util.Resource, updateAttributes map[string]interface{}) (interface{}, error) {
-	a.TenantID = &resource.TenantID
 	authentication, err := a.GetById(resource.ResourceUID)
 	if err != nil {
 		return nil, err
@@ -566,7 +580,7 @@ func (a *authenticationDaoImpl) FetchAndUpdateBy(resource util.Resource, updateA
 		return nil, err
 	}
 
-	sourceDao := GetSourceDao(a.TenantID)
+	sourceDao := GetSourceDao(&RequestParams{TenantID: a.TenantID})
 	source, err := sourceDao.GetById(&authentication.SourceID)
 	if err != nil {
 		return nil, err
@@ -640,6 +654,7 @@ func (a *authenticationDaoImpl) ListIdsForResource(resourceType string, resource
 
 	return authentications, nil
 }
+
 func (a *authenticationDaoImpl) BulkDelete(authentications []m.Authentication) ([]m.Authentication, error) {
 	var deletedAuthentications []m.Authentication
 	for _, auth := range authentications {

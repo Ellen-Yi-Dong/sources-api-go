@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"testing"
@@ -17,6 +18,8 @@ import (
 )
 
 func TestRhcConnectionList(t *testing.T) {
+	tenantId := int64(1)
+
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
 		"/api/sources/v3.1/rhc_connections",
@@ -25,7 +28,7 @@ func TestRhcConnectionList(t *testing.T) {
 			"limit":    100,
 			"offset":   0,
 			"filters":  []util.Filter{},
-			"tenantID": int64(1),
+			"tenantID": tenantId,
 		},
 	)
 
@@ -52,20 +55,90 @@ func TestRhcConnectionList(t *testing.T) {
 		t.Error("offset not set correctly")
 	}
 
-	if len(out.Data) != len(fixtures.TestRhcConnectionData) {
-		t.Error("not enough objects passed back from DB")
+	var wantCount int
+	for _, rhc := range fixtures.TestRhcConnectionData {
+		for _, srcRhc := range fixtures.TestSourceRhcConnectionData {
+			if srcRhc.RhcConnectionId == rhc.ID && srcRhc.TenantId == tenantId {
+				wantCount++
+				break
+			}
+		}
+	}
+
+	if len(out.Data) != wantCount {
+		t.Errorf("not enough objects passed back from DB, expected %d, got %d", wantCount, len(out.Data))
 	}
 
 	for _, rhcConnection := range out.Data {
-		_, ok := rhcConnection.(map[string]interface{})
+		rhc, ok := rhcConnection.(map[string]interface{})
 
 		if !ok {
 			t.Error("model did not deserialize as a source")
 		}
-
+		// Check that rhc connection belongs to correct tenant
+		for _, srcRhc := range fixtures.TestSourceRhcConnectionData {
+			if rhc["ID"] == fmt.Sprintf("%d", srcRhc.RhcConnectionId) {
+				if srcRhc.TenantId != tenantId {
+					t.Errorf("wrong tenant id in returned object, expected %d, got %d", tenantId, srcRhc.TenantId)
+				}
+				break
+			}
+		}
 	}
 
 	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
+}
+
+func TestRhcConnectionListTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	// For not existing tenant is expected that returned value
+	// will be empty list and return code 200
+	tenantId := fixtures.NotExistingTenantId
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/rhc_connections",
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	err := RhcConnectionList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.EmptySubcollectionListTest(t, c, rec)
+}
+
+func TestRhcConnectionListTenantWithoutRhcConnections(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	// For the tenant without rhc connections is expected that returned value
+	// will be empty list and return code 200
+	tenantId := int64(3)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/rhc_connections",
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	err := RhcConnectionList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.EmptySubcollectionListTest(t, c, rec)
 }
 
 func TestRhcConnectionListInvalidFilter(t *testing.T) {
@@ -95,6 +168,7 @@ func TestRhcConnectionListInvalidFilter(t *testing.T) {
 }
 
 func TestRhcConnectionGetById(t *testing.T) {
+	tenantId := int64(1)
 	id := strconv.FormatInt(fixtures.TestRhcConnectionData[0].ID, 10)
 
 	c, rec := request.CreateTestContext(
@@ -102,7 +176,7 @@ func TestRhcConnectionGetById(t *testing.T) {
 		"/api/sources/v3.1/rhc_connections/"+id,
 		nil,
 		map[string]interface{}{
-			"tenantID": int64(1),
+			"tenantID": tenantId,
 		},
 	)
 
@@ -126,6 +200,22 @@ func TestRhcConnectionGetById(t *testing.T) {
 
 	if *outRhcConnectionResponse.RhcId != fixtures.TestRhcConnectionData[0].RhcId {
 		t.Error("ghosts infected the return")
+	}
+
+	var outRhcId int64
+	outRhcId, err = strconv.ParseInt(*outRhcConnectionResponse.Id, 10, 64)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// check in fixtures that returned rhc connection belongs to the desired tenant
+	for _, srcRhc := range fixtures.TestSourceRhcConnectionData {
+		if srcRhc.RhcConnectionId == outRhcId {
+			if srcRhc.TenantId != tenantId {
+				t.Errorf("wrong tenant id, expected %d, got %d", tenantId, srcRhc.TenantId)
+			}
+			break
+		}
 	}
 }
 
@@ -164,6 +254,62 @@ func TestRhcConnectionGetByIdInvalidParam(t *testing.T) {
 	}
 
 	templates.BadRequestTest(t, rec)
+}
+
+// TestRhcConnectionGetByIdInvalidTenant tests that not found is returned for
+// existing rhc connection but when tenant is not owner of rhc connection
+func TestRhcConnectionGetByIdInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(3)
+	rhcId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d", rhcId),
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcId))
+
+	notFoundRhcConnectionGetByUuid := ErrorHandlingContext(RhcConnectionGetById)
+	err := notFoundRhcConnectionGetByUuid(c)
+	if err != nil {
+		t.Errorf(`want nil error, got "%s"`, err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestRhcConnectionGetByIdTenantNotExists tests that not found is returned for
+// not existing tenant
+func TestRhcConnectionGetByIdTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+	rhcId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d", rhcId),
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcId))
+
+	notFoundRhcConnectionGetByUuid := ErrorHandlingContext(RhcConnectionGetById)
+	err := notFoundRhcConnectionGetByUuid(c)
+	if err != nil {
+		t.Errorf(`want nil error, got "%s"`, err)
+	}
+
+	templates.NotFoundTest(t, rec)
 }
 
 func TestRhcConnectionGetByIdNotFound(t *testing.T) {
@@ -221,6 +367,80 @@ func TestRhcConnectionCreate(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Errorf("Want status code %d. Got %d. Body: %s", http.StatusCreated, rec.Code, rec.Body.String())
 	}
+}
+
+// TestRhcConnectionCreateTenantNotExists tests that not found is returned for
+// not existing tenant
+func TestRhcConnectionCreateTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+
+	requestBody := model.RhcConnectionCreateRequest{
+		Extra:       nil,
+		SourceIdRaw: fixtures.TestSourceData[1].ID,
+		RhcId:       "12345",
+	}
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		t.Error("Could not marshal JSON")
+	}
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/rhc_connections",
+		bytes.NewReader(body),
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+
+	notFoundRhcConnectionCreate := ErrorHandlingContext(RhcConnectionCreate)
+	err = notFoundRhcConnectionCreate(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestRhcConnectionCreateTenantNotOwnsSource tests that not found is returned for
+// existing tenant who doesn't own the source
+func TestRhcConnectionCreateTenantNotOwnsSource(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(3)
+
+	requestBody := model.RhcConnectionCreateRequest{
+		Extra:       nil,
+		SourceIdRaw: fixtures.TestSourceData[1].ID,
+		RhcId:       "12345",
+	}
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		t.Error("Could not marshal JSON")
+	}
+
+	c, rec := request.CreateTestContext(
+		http.MethodPost,
+		"/api/sources/v3.1/rhc_connections",
+		bytes.NewReader(body),
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+
+	notFoundRhcConnectionCreate := ErrorHandlingContext(RhcConnectionCreate)
+	err = notFoundRhcConnectionCreate(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
 }
 
 func TestRhcConnectionCreateInvalidInput(t *testing.T) {
@@ -318,6 +538,8 @@ func TestRhcConnectionCreateRelationExists(t *testing.T) {
 }
 
 func TestRhcConnectionEdit(t *testing.T) {
+	tenantId := int64(1)
+	rhcId := fixtures.TestRhcConnectionData[2].ID
 	requestBody := model.RhcConnectionEditRequest{
 		Extra: nil,
 	}
@@ -327,21 +549,19 @@ func TestRhcConnectionEdit(t *testing.T) {
 		t.Error("Could not marshal JSON")
 	}
 
-	id := strconv.FormatInt(fixtures.TestRhcConnectionData[2].ID, 10)
-
 	c, rec := request.CreateTestContext(
 		http.MethodPatch,
-		"/api/sources/v3.1/rhc_connections/"+id,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d", rhcId),
 		bytes.NewReader(body),
 		map[string]interface{}{
-			"tenantID": int64(1),
+			"tenantID": tenantId,
 		},
 	)
 
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 
 	c.SetParamNames("id")
-	c.SetParamValues(id)
+	c.SetParamValues(fmt.Sprintf("%d", rhcId))
 
 	err = RhcConnectionEdit(c)
 	if err != nil {
@@ -351,6 +571,54 @@ func TestRhcConnectionEdit(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("Want status code %d. Got %d. Body: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
+
+	// check in fixtures that changed rhc connection belongs to the desired tenant
+	for _, srcRhc := range fixtures.TestSourceRhcConnectionData {
+		if srcRhc.RhcConnectionId == rhcId {
+			if srcRhc.TenantId != tenantId {
+				t.Errorf("wrong tenant id, expected %d, got %d", tenantId, srcRhc.TenantId)
+			}
+			break
+		}
+	}
+}
+
+// TestRhcConnectionEditInvalidTenant tests situation when the tenant tries to
+// edit existing not owned rhc connection
+func TestRhcConnectionEditInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(2)
+	rhcId := fixtures.TestRhcConnectionData[2].ID
+	requestBody := model.RhcConnectionEditRequest{
+		Extra: nil,
+	}
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		t.Error("Could not marshal JSON")
+	}
+
+	c, rec := request.CreateTestContext(
+		http.MethodPatch,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d", rhcId),
+		bytes.NewReader(body),
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcId))
+
+	notFoundRhcConnectionEdit := ErrorHandlingContext(RhcConnectionEdit)
+	err = notFoundRhcConnectionEdit(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
 }
 
 func TestRhcConnectionEditInvalidParam(t *testing.T) {
@@ -403,32 +671,32 @@ func TestRhcConnectionEditNotFound(t *testing.T) {
 	templates.NotFoundTest(t, rec)
 }
 
-// func TestRhcConnectionDelete(t *testing.T) {
-// 	id := strconv.FormatInt(fixtures.TestRhcConnectionData[2].ID, 10)
+func TestRhcConnectionDelete(t *testing.T) {
+	id := strconv.FormatInt(fixtures.TestRhcConnectionData[2].ID, 10)
 
-// 	c, rec := request.CreateTestContext(
-// 		http.MethodDelete,
-// 		"/api/sources/v3.1/rhc_connections/"+id,
-// 		nil,
-// 		map[string]interface{}{
-// 			"tenantID": int64(1),
-// 		},
-// 	)
+	c, rec := request.CreateTestContext(
+		http.MethodDelete,
+		"/api/sources/v3.1/rhc_connections/"+id,
+		nil,
+		map[string]interface{}{
+			"tenantID": int64(1),
+		},
+	)
 
-// 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 
-// 	c.SetParamNames("id")
-// 	c.SetParamValues(id)
+	c.SetParamNames("id")
+	c.SetParamValues(id)
 
-// 	err := RhcConnectionDelete(c)
-// 	if err != nil {
-// 		t.Error(err)
-// 	}
+	err := RhcConnectionDelete(c)
+	if err != nil {
+		t.Error(err)
+	}
 
-// 	if rec.Code != http.StatusNoContent {
-// 		t.Errorf("Want status code %d. Got %d. Body: %s", http.StatusNoContent, rec.Code, rec.Body.String())
-// 	}
-// }
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Want status code %d. Got %d. Body: %s", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+}
 
 func TestRhcConnectionDeleteInvalidParam(t *testing.T) {
 	invalidId := "xxx"
@@ -477,6 +745,64 @@ func TestRhcConnectionDeleteMissingParam(t *testing.T) {
 	templates.BadRequestTest(t, rec)
 }
 
+// TestRhcConnectionDeleteInvalidTenant tests that not found err is returned
+// when tenant tries to delete not owned rhc connection
+func TestRhcConnectionDeleteInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(2)
+	rhcId := fixtures.TestRhcConnectionData[2].ID
+
+	c, rec := request.CreateTestContext(
+		http.MethodDelete,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d", rhcId),
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcId))
+
+	notFoundRhcConnectionDelete := ErrorHandlingContext(RhcConnectionDelete)
+	err := notFoundRhcConnectionDelete(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestRhcConnectionDeleteTenantNotExists tests that not found err is returned
+// when tenant doesn't exist
+func TestRhcConnectionDeleteTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(98304983)
+	rhcId := fixtures.TestRhcConnectionData[2].ID
+
+	c, rec := request.CreateTestContext(
+		http.MethodDelete,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d", rhcId),
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcId))
+
+	notFoundRhcConnectionDelete := ErrorHandlingContext(RhcConnectionDelete)
+	err := notFoundRhcConnectionDelete(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
 func TestRhcConnectionDeleteNotFound(t *testing.T) {
 	nonExistingId := "12345"
 
@@ -503,6 +829,7 @@ func TestRhcConnectionDeleteNotFound(t *testing.T) {
 }
 
 func TestRhcConnectionGetRelatedSources(t *testing.T) {
+	tenantId := int64(1)
 	rhcConnectionId := "2"
 
 	c, rec := request.CreateTestContext(
@@ -513,7 +840,7 @@ func TestRhcConnectionGetRelatedSources(t *testing.T) {
 			"limit":    100,
 			"offset":   0,
 			"filters":  []util.Filter{},
-			"tenantID": int64(1),
+			"tenantID": tenantId,
 		},
 	)
 
@@ -559,7 +886,12 @@ func TestRhcConnectionGetRelatedSources(t *testing.T) {
 		if !ok {
 			t.Error("model did not deserialize as a source")
 		}
+	}
 
+	// Check that all sources belong to our tenant
+	err = checkAllSourcesBelongToTenant(tenantId, out.Data)
+	if err != nil {
+		t.Error(err)
 	}
 }
 
@@ -638,6 +970,68 @@ func TestRhcConnectionGetRelatedSourcesNotFound(t *testing.T) {
 
 	c.SetParamNames("id")
 	c.SetParamValues(rhcConnectionId)
+
+	notFoundRhcConnectionSourcesList := ErrorHandlingContext(RhcConnectionSourcesList)
+	err := notFoundRhcConnectionSourcesList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestRhcConnectionGetRelatedSourcesInvalidTenant tests that not found err is returned
+// when tenant tries to list sources for not owned rhc connection
+func TestRhcConnectionGetRelatedSourcesInvalidTenant(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(3)
+	rhcConnectionId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d/sources", rhcConnectionId),
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcConnectionId))
+
+	notFoundRhcConnectionSourcesList := ErrorHandlingContext(RhcConnectionSourcesList)
+	err := notFoundRhcConnectionSourcesList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
+}
+
+// TestRhcConnectionGetRelatedSourcesTenantNotExists tests that not found err is returned
+// when tenant doesn't exist
+func TestRhcConnectionGetRelatedSourcesTenantNotExists(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+	rhcConnectionId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		fmt.Sprintf("/api/sources/v3.1/rhc_connections/%d/sources", rhcConnectionId),
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("id")
+	c.SetParamValues(fmt.Sprintf("%d", rhcConnectionId))
 
 	notFoundRhcConnectionSourcesList := ErrorHandlingContext(RhcConnectionSourcesList)
 	err := notFoundRhcConnectionSourcesList(c)

@@ -17,13 +17,12 @@ import (
 var getApplicationDao func(c echo.Context) (dao.ApplicationDao, error)
 
 func getApplicationDaoWithTenant(c echo.Context) (dao.ApplicationDao, error) {
-	tenantId, err := getTenantFromEchoContext(c)
-
+	requestParams, err := dao.NewRequestParamsFromContext(c)
 	if err != nil {
 		return nil, err
 	}
 
-	return dao.GetApplicationDao(&tenantId), nil
+	return dao.GetApplicationDao(requestParams), nil
 }
 
 func ApplicationList(c echo.Context) error {
@@ -97,7 +96,7 @@ func ApplicationCreate(c echo.Context) error {
 
 	err = service.ValidateApplicationCreateRequest(input)
 	if err != nil {
-		return util.NewErrBadRequest(fmt.Sprintf("Validation failed: %s", err.Error()))
+		return util.NewErrBadRequest(fmt.Sprintf("Validation failed: %v", err))
 	}
 
 	application := &m.Application{
@@ -235,7 +234,7 @@ func ApplicationDelete(c echo.Context) error {
 		return err
 	}
 
-	err = service.DeleteCascade(applicationDB.Tenant(), "Application", id, forwardableHeaders)
+	err = service.DeleteCascade(applicationDB.Tenant(), applicationDB.User(), "Application", id, forwardableHeaders)
 	if err != nil {
 		return err
 	}
@@ -327,6 +326,17 @@ func ApplicationPause(c echo.Context) error {
 		return err
 	}
 
+	// Check if the application exists
+	appExists, err := applicationDao.Exists(applicationId)
+	if err != nil {
+		return err
+	}
+
+	if !appExists {
+		return util.NewErrNotFound("application")
+	}
+
+	// Pause the existing application
 	err = applicationDao.Pause(applicationId)
 	if err != nil {
 		return util.NewErrBadRequest(err)
@@ -364,6 +374,17 @@ func ApplicationUnpause(c echo.Context) error {
 		return err
 	}
 
+	// Check if the application exists
+	appExists, err := applicationDao.Exists(applicationId)
+	if err != nil {
+		return err
+	}
+
+	if !appExists {
+		return util.NewErrNotFound("application")
+	}
+
+	// Unpause the existing application
 	err = applicationDao.Unpause(applicationId)
 	if err != nil {
 		return util.NewErrBadRequest(err)

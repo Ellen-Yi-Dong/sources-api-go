@@ -90,6 +90,7 @@ objects:
       webServices:
         public:
           enabled: true
+          apiPath: sources
       podSpec:
         image: ${IMAGE}:${IMAGE_TAG}
         env:
@@ -142,6 +143,12 @@ objects:
               optional: true
         - name: FEATURE_FLAGS_SERVICE
           value: ${FEATURE_FLAGS_SERVICE}
+        - name: RESOURCE_OWNERSHIP
+          value: ${RESOURCE_OWNERSHIP}
+        - name: SOURCE_TYPE_SKIP_LIST
+          value: ${SOURCE_TYPE_SKIP_LIST}
+        - name: APPLICATION_TYPE_SKIP_LIST
+          value: ${APPLICATION_TYPE_SKIP_LIST}
         readinessProbe:
           tcpSocket:
             port: 8000
@@ -244,7 +251,7 @@ parameters:
 - name: KOKU_SOURCES_API_APP_CHECK_PATH
   value: /api/cost-management/v1/source-status/
 - name: LOG_LEVEL
-  value: WARN
+  value: INFO
 - name: MEMORY_LIMIT
   value: 1Gi
 - name: MEMORY_REQUEST
@@ -262,7 +269,7 @@ parameters:
   value: '1'
 - description: The number of replicas to use for the availability status listener
   name: AVAILABILITY_MIN_REPLICAS
-  value: '0'
+  value: '1'
 - description: 'Options can be found in the doc: https://www.postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-SSLMODE-STATEMENTS'
   displayName: Postgres SSL mode
   name: PGSSLMODE
@@ -326,4 +333,12 @@ parameters:
 - description: Specify name of service for Feature Flags
   name: FEATURE_FLAGS_SERVICE
   value: 'unleash'
-
+- description: Specify name to select strategy to ensure resource ownership
+  name: RESOURCE_OWNERSHIP
+  value: ''
+- description: Specify any source_types to not seed into the database
+  name: SOURCE_TYPE_SKIP_LIST
+  value: ''
+- description: Specify any application_types to not seed into the database
+  name: APPLICATION_TYPE_SKIP_LIST
+  value: ''

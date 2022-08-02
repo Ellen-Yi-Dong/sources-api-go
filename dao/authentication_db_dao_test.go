@@ -14,6 +14,7 @@ import (
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/fixtures"
 	"github.com/RedHatInsights/sources-api-go/model"
 	"github.com/RedHatInsights/sources-api-go/util"
+	"github.com/google/uuid"
 )
 
 // TestAuthType is an authentication type used in the fixtures to perform checks.
@@ -30,7 +31,7 @@ func setUpValidAuthentication() *model.Authentication {
 
 // createAuthenticationFixture inserts a new authentication fixture in the database.
 func createAuthenticationFixture(t *testing.T) {
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	auth := setUpValidAuthentication()
 
@@ -47,7 +48,7 @@ func TestAuthenticationDbCreate(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	auth := setUpValidAuthentication()
 
@@ -67,7 +68,7 @@ func TestAuthenticationDbBulkCreate(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	auth := setUpValidAuthentication()
 
@@ -85,7 +86,7 @@ func TestAuthenticationDbList(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	// Create another authentication to see if the listing function also brings it back.
 	createAuthenticationFixture(t)
@@ -126,7 +127,7 @@ func TestAuthenticationDbGetById(t *testing.T) {
 	// Create the authentication fixture that we will be fetching.
 	authFixture := setUpValidAuthentication()
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	// Using bulk create so we don't check to see if the resource is there first
 	err := dao.BulkCreate(authFixture)
 	if err != nil {
@@ -158,7 +159,7 @@ func TestAuthenticationDbUpdate(t *testing.T) {
 	// Create the authentication fixture that we will be fetching.
 	authFixture := setUpValidAuthentication()
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	// Using bulk create so we don't check to see if the resource is there first
 	err := dao.BulkCreate(authFixture)
 	if err != nil {
@@ -200,7 +201,7 @@ func TestAuthenticationDbDelete(t *testing.T) {
 	// Create the authentication fixture that we will be fetching.
 	authFixture := setUpValidAuthentication()
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	// Using bulk create so we don't check to see if the resource is there first
 	err := dao.BulkCreate(authFixture)
 	if err != nil {
@@ -237,7 +238,7 @@ func TestAuthenticationDbDeleteNotFound(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	_, err := dao.Delete("12345")
 	if !errors.Is(err, util.ErrNotFoundEmpty) {
 		t.Errorf(`unexpected error received. Want "%s", got "%s"`, reflect.TypeOf(util.ErrNotFoundEmpty), reflect.TypeOf(err))
@@ -249,7 +250,7 @@ func TestAuthenticationDbDeleteNotFound(t *testing.T) {
 // TestTenantId is a trivial test which tests that a correct tenant ID is returned in the function.
 func TestTenantId(t *testing.T) {
 	tenantId := int64(12345)
-	dao := GetAuthenticationDao(&tenantId)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &tenantId})
 
 	want := tenantId
 	got := dao.Tenant()
@@ -266,11 +267,14 @@ func TestListForSource(t *testing.T) {
 	SwitchSchema("authentications_db")
 
 	// Create a new source the new fixtures will be attached to.
-	sourceDao := GetSourceDao(&fixtures.TestTenantData[1].Id)
+	sourceDao := GetSourceDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
+	uuidRaw, _ := uuid.NewUUID()
+	uuidStr := uuidRaw.String()
 	source := model.Source{
 		Name:         "new source in new tenant",
 		SourceTypeID: fixtures.TestSourceTypeData[0].Id,
 		TenantID:     fixtures.TestTenantData[1].Id,
+		Uid:          &uuidStr,
 	}
 
 	err := sourceDao.Create(&source)
@@ -279,7 +283,7 @@ func TestListForSource(t *testing.T) {
 	}
 
 	// Create three new authentications for the new source.
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	var i int
 	var maxAuths = 3
 	for i < maxAuths {
@@ -327,7 +331,7 @@ func TestListForSourceNotFound(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 
 	// Call the function under test.
 	_, _, err := dao.ListForSource(12345, 100, 0, []util.Filter{})
@@ -351,11 +355,14 @@ func TestListForApplication(t *testing.T) {
 	SwitchSchema("authentications_db")
 
 	// Create a new source the new fixtures will be attached to.
-	sourceDao := GetSourceDao(&fixtures.TestTenantData[1].Id)
+	sourceDao := GetSourceDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
+	uuidRaw, _ := uuid.NewUUID()
+	uuidStr := uuidRaw.String()
 	source := model.Source{
 		Name:         "new source in new tenant",
 		SourceTypeID: fixtures.TestSourceTypeData[0].Id,
 		TenantID:     fixtures.TestTenantData[1].Id,
+		Uid:          &uuidStr,
 	}
 
 	err := sourceDao.Create(&source)
@@ -364,7 +371,7 @@ func TestListForApplication(t *testing.T) {
 	}
 
 	// Create an application fixture.
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[1].Id)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	application := model.Application{
 		ApplicationTypeID: fixtures.TestApplicationTypeData[0].Id,
 		SourceID:          source.ID,
@@ -376,7 +383,7 @@ func TestListForApplication(t *testing.T) {
 	}
 
 	// Create three new authentications for the new application.
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	var i int
 	var maxAuths = 3
 	for i < maxAuths {
@@ -423,7 +430,7 @@ func TestListForApplicationNotFound(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 
 	// Call the function under test.
 	_, _, err := dao.ListForApplication(12345, 100, 0, []util.Filter{})
@@ -447,11 +454,14 @@ func TestListForApplicationAuthentication(t *testing.T) {
 	SwitchSchema("authentications_db")
 
 	// Create a new source the new fixtures will be attached to.
-	sourceDao := GetSourceDao(&fixtures.TestTenantData[1].Id)
+	sourceDao := GetSourceDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
+	uuidRaw, _ := uuid.NewUUID()
+	uuidStr := uuidRaw.String()
 	source := model.Source{
 		Name:         "new source in new tenant",
 		SourceTypeID: fixtures.TestSourceTypeData[0].Id,
 		TenantID:     fixtures.TestTenantData[1].Id,
+		Uid:          &uuidStr,
 	}
 
 	err := sourceDao.Create(&source)
@@ -460,7 +470,7 @@ func TestListForApplicationAuthentication(t *testing.T) {
 	}
 
 	// Create an application fixture.
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[1].Id)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	application := model.Application{
 		ApplicationTypeID: fixtures.TestApplicationTypeData[0].Id,
 		SourceID:          source.ID,
@@ -472,7 +482,7 @@ func TestListForApplicationAuthentication(t *testing.T) {
 	}
 
 	// Create a new authentication for the new application authentication.
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	auth := &model.Authentication{
 		AuthType:     TestAuthType,
 		ResourceType: "Application",
@@ -487,7 +497,7 @@ func TestListForApplicationAuthentication(t *testing.T) {
 	}
 
 	// Create the application authentication.
-	appAuthDao := GetApplicationAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	appAuthDao := GetApplicationAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	appAuth := model.ApplicationAuthentication{
 		TenantID:         fixtures.TestTenantData[1].Id,
 		ApplicationID:    application.ID,
@@ -527,7 +537,7 @@ func TestListForApplicationAuthenticationNotFound(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 
 	// Call the function under test.
 	_, _, err := dao.ListForApplicationAuthentication(12345, 100, 0, []util.Filter{})
@@ -550,11 +560,14 @@ func TestListForEndpoint(t *testing.T) {
 	SwitchSchema("authentications_db")
 
 	// Create a new source the new fixtures will be attached to.
-	sourceDao := GetSourceDao(&fixtures.TestTenantData[1].Id)
+	sourceDao := GetSourceDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
+	uuidRaw, _ := uuid.NewUUID()
+	uuidStr := uuidRaw.String()
 	source := model.Source{
 		Name:         "new source in new tenant",
 		SourceTypeID: fixtures.TestSourceTypeData[0].Id,
 		TenantID:     fixtures.TestTenantData[1].Id,
+		Uid:          &uuidStr,
 	}
 
 	err := sourceDao.Create(&source)
@@ -574,7 +587,7 @@ func TestListForEndpoint(t *testing.T) {
 	}
 
 	// Create three new authentications for the new application authentication.
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 	var i int
 	var maxAuths = 3
 	for i < maxAuths {
@@ -621,7 +634,7 @@ func TestListForEndpointNotFound(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("authentications_db")
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[1].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[1].Id})
 
 	// Call the function under test.
 	_, _, err := dao.ListForEndpoint(12345, 0, 0, []util.Filter{})
@@ -646,7 +659,7 @@ func TestFetchAndUpdateBy(t *testing.T) {
 	// Create the authentication fixture that we will be fetching.
 	authFixture := setUpValidAuthentication()
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	// Using bulk create so we don't check to see if the resource is there first
 	err := dao.BulkCreate(authFixture)
 	if err != nil {
@@ -733,7 +746,7 @@ func TestToEventJSON(t *testing.T) {
 	// Create the authentication fixture that we will be fetching.
 	authFixture := setUpValidAuthentication()
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	// Using bulk create so we don't check to see if the resource is there first
 	err := dao.BulkCreate(authFixture)
 	if err != nil {
@@ -783,7 +796,7 @@ func TestBulkMessage(t *testing.T) {
 	authFixture.ResourceID = fixtures.TestSourceData[0].ID
 	authFixture.ResourceType = "Source"
 
-	dao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	dao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	err := dao.BulkCreate(authFixture)
 	if err != nil {
 		t.Errorf(`error creating the authentication: %s`, err)
@@ -797,7 +810,7 @@ func TestBulkMessage(t *testing.T) {
 	if err != nil {
 		t.Errorf(`could not fetch the authentication from the database: %s`, err)
 	}
-	sourceDao := GetSourceDao(&fixtures.TestTenantData[0].Id)
+	sourceDao := GetSourceDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	source, err := sourceDao.GetById(&authFixture.SourceID)
 	if err != nil {
 		t.Errorf(`could not fetch source: %s`, err)
@@ -877,7 +890,7 @@ func TestListIdsForResource(t *testing.T) {
 	// How many authentications will we be creating per resource?
 	maxAuthenticationsPerResource := 5
 
-	authsDao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	authsDao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	// Create the authentications.
 	for _, resource := range resources {
@@ -986,7 +999,7 @@ func TestBulkDelete(t *testing.T) {
 	// How many authentications will we be creating per resource?
 	maxAuthenticationsPerResource := 5
 
-	authsDao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	authsDao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	// Store the authentications for later.
 	var createdAuthentications = make([]model.Authentication, 0, len(resources)*maxAuthenticationsPerResource)
@@ -1083,7 +1096,7 @@ func TestBulkDeleteRegression(t *testing.T) {
 	// How many authentications will we be creating per resource?
 	maxAuthenticationsPerResource := 5
 
-	authsDao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	authsDao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	for i := 0; i < maxAuthenticationsPerResource; i++ {
 		authFixture := setUpValidAuthentication()

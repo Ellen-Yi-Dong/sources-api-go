@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/RedHatInsights/sources-api-go/util"
 	pluralize "github.com/gertd/go-pluralize"
 	"github.com/iancoleman/strcase"
 	"gorm.io/gorm"
@@ -117,10 +118,23 @@ func (relationObject *RelationObject) setRelationObjectID() error {
 
 func (relationObject *RelationObject) checkIfPrimaryRecordExists(query *gorm.DB) error {
 	result := map[string]interface{}{}
-	query.Model(relationObject.baseObject).Find(&result, relationObject.Id)
+
+	switch relationObject.baseObject.(type) {
+	case Source:
+		query.Model(relationObject.baseObject).
+			Where("tenant_id = ?", relationObject.CurrentTenantID).
+			Find(&result, relationObject.Id)
+
+	case SourceType, ApplicationType:
+		query.Model(relationObject.baseObject).
+			Find(&result, relationObject.Id)
+
+	default:
+		return fmt.Errorf("unexpected primary record type")
+	}
 
 	if len(result) == 0 {
-		return fmt.Errorf("record not found")
+		return util.NewErrNotFound(relationObject.StringBaseObject())
 	}
 
 	return nil
@@ -138,7 +152,7 @@ func NewRelationObject(objectModel interface{}, currentTenantID int64, query *go
 		return object, err
 	}
 
-	return object, err
+	return object, nil
 }
 
 func (relationObject *RelationObject) StringBaseObject() string {

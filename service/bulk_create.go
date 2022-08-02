@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/RedHatInsights/sources-api-go/config"
 	"github.com/RedHatInsights/sources-api-go/dao"
 	"github.com/RedHatInsights/sources-api-go/kafka"
 	l "github.com/RedHatInsights/sources-api-go/logger"
@@ -31,7 +32,7 @@ import (
 	3. Saving the Authentications
 	4. Saving the ApplicationAuthentications if necessary
 */
-func BulkAssembly(req m.BulkCreateRequest, tenant *m.Tenant) (*m.BulkCreateOutput, error) {
+func BulkAssembly(req m.BulkCreateRequest, tenant *m.Tenant, user *m.User) (*m.BulkCreateOutput, error) {
 	// the output from this request.
 	var output m.BulkCreateOutput
 
@@ -39,8 +40,15 @@ func BulkAssembly(req m.BulkCreateRequest, tenant *m.Tenant) (*m.BulkCreateOutpu
 	err := dao.DB.Transaction(func(tx *gorm.DB) error {
 		var err error
 
+		userResource, err := userResourceFromBulkCreateApplications(user, req.Applications, tenant)
+		if err != nil {
+			return err
+		}
+
+		userResource.User = user
+
 		// parse the sources, then save them in the transaction.
-		output.Sources, err = parseSources(req.Sources, tenant)
+		output.Sources, err = parseSources(req.Sources, tenant, userResource)
 		if err != nil {
 			return err
 		}
@@ -49,7 +57,7 @@ func BulkAssembly(req m.BulkCreateRequest, tenant *m.Tenant) (*m.BulkCreateOutpu
 			return err
 		}
 
-		output.Applications, err = parseApplications(req.Applications, &output, tenant)
+		output.Applications, err = parseApplications(req.Applications, &output, tenant, userResource)
 		if err != nil {
 			return err
 		}
@@ -68,26 +76,38 @@ func BulkAssembly(req m.BulkCreateRequest, tenant *m.Tenant) (*m.BulkCreateOutpu
 		}
 
 		// link up the authentications to their polymorphic relations.
-		output.Authentications, err = linkUpAuthentications(req, &output, tenant)
+		output.Authentications, err = linkUpAuthentications(req, &output, tenant, userResource)
 		if err != nil {
 			return err
 		}
 
 		for i := 0; i < len(output.Authentications); i++ {
-			err = dao.GetAuthenticationDao(&tenant.Id).BulkCreate(&output.Authentications[i])
+			err = dao.GetAuthenticationDao(&dao.RequestParams{TenantID: &tenant.Id}).BulkCreate(&output.Authentications[i])
 			if err != nil {
 				return err
 			}
 
 			if strings.ToLower(output.Authentications[i].ResourceType) == "application" {
-				output.ApplicationAuthentications = append(output.ApplicationAuthentications, m.ApplicationAuthentication{
+				applicationAuthentication := m.ApplicationAuthentication{
 					// TODO: After vault migration.
 					// VaultPath:         output.Authentications[i].Path(),
 					ApplicationID:    output.Authentications[i].ResourceID,
 					AuthenticationID: output.Authentications[i].DbID,
 					TenantID:         tenant.Id,
 					Tenant:           *tenant,
-				})
+				}
+
+				applicationTypeID := findApplicationTypeIdByApplicationID(output.Authentications[i].ResourceID, output.Applications)
+				if applicationTypeID != nil {
+					applicationType := &m.ApplicationType{}
+					if tx.Debug().Where("application_types.id = ?", applicationTypeID).First(&applicationType).Error == nil {
+						if userResource.OwnershipPresentForApplication(applicationType.Name) {
+							applicationAuthentication.UserID = &userResource.User.Id
+						}
+					}
+				}
+
+				output.ApplicationAuthentications = append(output.ApplicationAuthentications, applicationAuthentication)
 			}
 		}
 
@@ -102,7 +122,17 @@ func BulkAssembly(req m.BulkCreateRequest, tenant *m.Tenant) (*m.BulkCreateOutpu
 	return &output, err
 }
 
-func parseSources(reqSources []m.BulkCreateSource, tenant *m.Tenant) ([]m.Source, error) {
+func findApplicationTypeIdByApplicationID(applicationID int64, applications []m.Application) *int64 {
+	for _, currentApplication := range applications {
+		if currentApplication.ID == applicationID {
+			return &currentApplication.ApplicationTypeID
+		}
+	}
+
+	return nil
+}
+
+func parseSources(reqSources []m.BulkCreateSource, tenant *m.Tenant, userResource *m.UserResource) ([]m.Source, error) {
 	sources := make([]m.Source, len(reqSources))
 
 	for i, source := range reqSources {
@@ -139,9 +169,9 @@ func parseSources(reqSources []m.BulkCreateSource, tenant *m.Tenant) ([]m.Source
 		s.SourceType = *sourceType
 
 		// validate the source request
-		err = ValidateSourceCreationRequest(dao.GetSourceDao(&tenant.Id), &source.SourceCreateRequest)
+		err = ValidateSourceCreationRequest(dao.GetSourceDao(&dao.RequestParams{TenantID: &tenant.Id}), &source.SourceCreateRequest)
 		if err != nil {
-			return nil, err
+			return nil, util.NewErrBadRequest(fmt.Sprintf("Validation failed: %v", err))
 		}
 
 		// copy the fields into the alloc'd source struct
@@ -161,6 +191,10 @@ func parseSources(reqSources []m.BulkCreateSource, tenant *m.Tenant) ([]m.Source
 		s.Applications = make([]m.Application, 0)
 		s.Authentications = make([]m.Authentication, 0)
 
+		if userResource.OwnershipPresentForSource(s.Name) {
+			s.UserID = &userResource.User.Id
+		}
+
 		// add it to the list
 		sources[i] = s
 	}
@@ -168,7 +202,7 @@ func parseSources(reqSources []m.BulkCreateSource, tenant *m.Tenant) ([]m.Source
 	return sources, nil
 }
 
-func parseApplications(reqApplications []m.BulkCreateApplication, current *m.BulkCreateOutput, tenant *m.Tenant) ([]m.Application, error) {
+func parseApplications(reqApplications []m.BulkCreateApplication, current *m.BulkCreateOutput, tenant *m.Tenant, userResource *m.UserResource) ([]m.Application, error) {
 	applications := make([]m.Application, 0)
 
 	for _, app := range reqApplications {
@@ -195,6 +229,10 @@ func parseApplications(reqApplications []m.BulkCreateApplication, current *m.Bul
 			a.Tenant = *tenant
 			a.TenantID = tenant.Id
 
+			if userResource.OwnershipPresentForSourceAndApplication(app.SourceName, app.ApplicationTypeName) {
+				a.UserID = &userResource.User.Id
+			}
+
 			applications = append(applications, *a)
 		}
 	}
@@ -214,6 +252,18 @@ func parseEndpoints(reqEndpoints []m.BulkCreateEndpoint, current *m.BulkCreateOu
 	for _, endpt := range reqEndpoints {
 		e := m.Endpoint{}
 
+		// The source ID needs to be set before validating the endpoint, since otherwise the validation always fails.
+		for _, src := range current.Sources {
+			if src.Name != endpt.SourceName {
+				continue
+			}
+
+			// "IDRaw" is the one validated by the validator.
+			endpt.EndpointCreateRequest.SourceIDRaw = src.ID
+			// We will pick this one, however, to assign it to the endpoint struct.
+			endpt.SourceID = src.ID
+		}
+
 		err := ValidateEndpointCreateRequest(dao.GetEndpointDao(&tenant.Id), &endpt.EndpointCreateRequest)
 		if err != nil {
 			return nil, err
@@ -224,17 +274,11 @@ func parseEndpoints(reqEndpoints []m.BulkCreateEndpoint, current *m.BulkCreateOu
 		e.Path = &endpt.Path
 		e.Port = endpt.Port
 		e.VerifySsl = endpt.VerifySsl
+		e.SourceID = endpt.SourceID
 		e.Tenant = *tenant
 		e.TenantID = tenant.Id
 
-		for _, src := range current.Sources {
-			if src.Name != endpt.SourceName {
-				continue
-			}
-
-			e.SourceID = src.ID
-			endpoints = append(endpoints, e)
-		}
+		endpoints = append(endpoints, e)
 	}
 
 	// if all of the endpoints did not get linked up - there was a problem
@@ -246,7 +290,7 @@ func parseEndpoints(reqEndpoints []m.BulkCreateEndpoint, current *m.BulkCreateOu
 	return endpoints, nil
 }
 
-func linkUpAuthentications(req m.BulkCreateRequest, current *m.BulkCreateOutput, tenant *m.Tenant) ([]m.Authentication, error) {
+func linkUpAuthentications(req m.BulkCreateRequest, current *m.BulkCreateOutput, tenant *m.Tenant, userResource *m.UserResource) ([]m.Authentication, error) {
 	authentications := make([]m.Authentication, 0)
 
 	for _, auth := range req.Authentications {
@@ -269,7 +313,7 @@ func linkUpAuthentications(req m.BulkCreateRequest, current *m.BulkCreateOutput,
 			var err error
 			switch strings.ToLower(auth.ResourceType) {
 			case "source":
-				_, err = dao.GetSourceDao(&tenant.Id).GetById(&id)
+				_, err = dao.GetSourceDao(&dao.RequestParams{TenantID: &tenant.Id, UserID: &userResource.User.Id}).GetById(&id)
 				if err == nil {
 					l.Log.Debugf("Found existing Source with id %v, adding to list and continuing", id)
 					a.ResourceID = id
@@ -277,7 +321,7 @@ func linkUpAuthentications(req m.BulkCreateRequest, current *m.BulkCreateOutput,
 					continue
 				}
 			case "application":
-				_, err = dao.GetApplicationDao(&tenant.Id).GetById(&id)
+				_, err = dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenant.Id, UserID: &userResource.User.Id}).GetById(&id)
 				if err == nil {
 					l.Log.Debugf("Found existing Application with id %v, adding to list and continuing", id)
 					a.ResourceID = id
@@ -300,6 +344,11 @@ func linkUpAuthentications(req m.BulkCreateRequest, current *m.BulkCreateOutput,
 		case "source":
 			a.ResourceID = current.Sources[0].ID
 			a.SourceID = current.Sources[0].ID
+
+			if userResource.OwnershipPresentForSource(current.Sources[0].Name) {
+				a.UserID = &userResource.User.Id
+			}
+
 			l.Log.Infof("Source Authentication does not need linked - continuing")
 
 		case "application":
@@ -310,6 +359,10 @@ func linkUpAuthentications(req m.BulkCreateRequest, current *m.BulkCreateOutput,
 
 			a.ResourceID = id
 			a.SourceID = current.Sources[0].ID
+
+			if userResource.OwnershipPresentForSourceAndApplication(current.Sources[0].Name, auth.ResourceName) {
+				a.UserID = &userResource.User.Id
+			}
 
 		case "endpoint":
 			id, err := linkupEndpoint(auth.ResourceName, current.Endpoints)
@@ -455,4 +508,28 @@ func applicationFromBulkCreateApplication(reqApplication *m.BulkCreateApplicatio
 	}
 
 	return &a, nil
+}
+
+func loadUserResourceSettingFromBulkCreateApplication(userResource *m.UserResource, bulkCreateApplication *m.BulkCreateApplication, tenant *m.Tenant) error {
+	app, err := applicationFromBulkCreateApplication(bulkCreateApplication, tenant)
+	if err != nil {
+		return err
+	} else if app.ApplicationType.UserResourceOwnership() {
+		userResource.AddSourceAndApplicationTypeNames(bulkCreateApplication.SourceName, bulkCreateApplication.ApplicationTypeName)
+	}
+
+	return nil
+}
+
+func userResourceFromBulkCreateApplications(user *m.User, applications []m.BulkCreateApplication, tenant *m.Tenant) (*m.UserResource, error) {
+	userResource := &m.UserResource{User: user, ResourceOwnership: config.Get().ResourceOwnership}
+
+	for _, reqApp := range applications {
+		err := loadUserResourceSettingFromBulkCreateApplication(userResource, &reqApp, tenant)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return userResource, nil
 }

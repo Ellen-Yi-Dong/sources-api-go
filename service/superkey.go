@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/RedHatInsights/sources-api-go/config"
@@ -11,7 +12,9 @@ import (
 	"github.com/redhatinsights/sources-superkey-worker/superkey"
 )
 
-const SUPERKEY_REQUEST_QUEUE = "platform.sources.superkey-requests"
+const superkeyRequestedTopic = "platform.sources.superkey-requests"
+
+var superkeyTopic = config.Get().KafkaTopic(superkeyRequestedTopic)
 
 func SendSuperKeyCreateRequest(application *m.Application, headers []kafka.Header) error {
 	// load up the app + associations from the db+vault
@@ -128,16 +131,17 @@ func SendSuperKeyDeleteRequest(application *m.Application, headers []kafka.Heade
 }
 
 func produceSuperkeyRequest(m *kafka.Message) error {
-	mgr := kafka.Manager{
-		Config: kafka.Config{
-			KafkaBrokers:   config.Get().KafkaBrokers,
-			ProducerConfig: kafka.ProducerConfig{Topic: config.Get().KafkaTopic(SUPERKEY_REQUEST_QUEUE)}}}
-
-	err := mgr.Produce(m)
+	writer, err := kafka.GetWriter(&conf.KafkaBrokerConfig, superkeyTopic)
 	if err != nil {
-		mgr.Producer().Close()
+		return fmt.Errorf(`unable to create a Kafka writer to produce a superkey request: %w`, err)
+	}
+
+	defer kafka.CloseWriter(writer, "produce superkey request")
+
+	err = kafka.Produce(writer, m)
+	if err != nil {
 		return err
 	}
 
-	return mgr.Producer().Close()
+	return nil
 }

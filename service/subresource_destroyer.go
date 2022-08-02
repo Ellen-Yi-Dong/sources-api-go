@@ -31,13 +31,14 @@ import (
 //
 // Finally, those authentications are safely encrypted so they can stay in their datastores until we manually remove
 // them.
-func DeleteCascade(tenantId *int64, resourceType string, resourceId int64, headers []kafka.Header) error {
-	authenticationsDao := dao.GetAuthenticationDao(tenantId)
+func DeleteCascade(tenantId *int64, userId *int64, resourceType string, resourceId int64, headers []kafka.Header) error {
+	authenticationsDao := dao.GetAuthenticationDao(&dao.RequestParams{TenantID: tenantId})
+
 	var authentications []model.Authentication
 
 	switch resourceType {
 	case "Source":
-		sourceDao := dao.GetSourceDao(tenantId)
+		sourceDao := dao.GetSourceDao(&dao.RequestParams{TenantID: tenantId, UserID: userId})
 		applicationAuthentications, applications, endpoints, rhcConnections, source, err := sourceDao.DeleteCascade(resourceId)
 		if err != nil {
 			return fmt.Errorf(`could not completely delete the source: %s`, err)
@@ -105,7 +106,7 @@ func DeleteCascade(tenantId *int64, resourceType string, resourceId int64, heade
 		}
 
 	case "Application":
-		applicationsDao := dao.GetApplicationDao(tenantId)
+		applicationsDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: tenantId, UserID: userId})
 		applicationAuthentications, application, err := applicationsDao.DeleteCascade(resourceId)
 		if err != nil {
 			return fmt.Errorf(`could not completely delete the application: %s`, err)

@@ -48,7 +48,7 @@ func LoadJSONContentFrom(resourceType string, resourceID string, prefix string) 
 	fileContent, err := os.ReadFile(fileName)
 
 	if err != nil {
-		panic(fmt.Errorf("unable to read file %s because of %s", fileName, err.Error()))
+		panic(fmt.Errorf("unable to read file %s because of %v", fileName, err))
 	}
 
 	return fileContent
@@ -171,7 +171,7 @@ func FetchDataFor(resourceType string, resourceID string, forBulkMessage bool) (
 			ApplicationAuthentications: []m.ApplicationAuthentication{},
 		}
 
-		authDao := dao.GetAuthenticationDao(&application.TenantID)
+		authDao := dao.GetAuthenticationDao(&dao.RequestParams{TenantID: &application.TenantID})
 		authenticationsByResource, err := authDao.AuthenticationsByResource(authentication)
 		if err != nil {
 			panic("error to fetch authentications: " + err.Error())
@@ -208,7 +208,7 @@ func FetchDataFor(resourceType string, resourceID string, forBulkMessage bool) (
 			ResourceType:               "Endpoint",
 			ApplicationAuthentications: []m.ApplicationAuthentication{},
 		}
-		authDao := dao.GetAuthenticationDao(&endpoint.TenantID)
+		authDao := dao.GetAuthenticationDao(&dao.RequestParams{TenantID: &endpoint.TenantID})
 		authenticationsByResource, err := authDao.AuthenticationsByResource(authentication)
 		if err != nil {
 			return err, nil
@@ -378,7 +378,7 @@ func (streamProducerSender *MockEventStreamSender) RaiseEvent(eventType string, 
 	}
 
 	if err != nil {
-		streamProducerSender.TestSuite.Errorf("error with parsing JSON: %s", err.Error())
+		streamProducerSender.TestSuite.Errorf("error with parsing JSON: %v", err)
 	}
 
 	return err

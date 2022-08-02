@@ -14,7 +14,7 @@ import (
 // loads up the application as well as the associates we need for the superkey
 // request
 func loadApplication(application *m.Application) (*m.Application, error) {
-	appDao := dao.GetApplicationDao(&application.TenantID)
+	appDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &application.TenantID})
 
 	// re-pulling it from the db to make sure we have the full-version, as well
 	// as preloading any relations necessary.
@@ -89,7 +89,7 @@ func getExtraValues(application *m.Application, provider string) (map[string]str
 // returns the "super key" e.g. the authentication used to communicate with the
 // provider
 func getSuperKeyAuthentication(application *m.Application) (*m.Authentication, error) {
-	authDao := dao.GetAuthenticationDao(&application.TenantID)
+	authDao := dao.GetAuthenticationDao(&dao.RequestParams{TenantID: &application.TenantID})
 
 	// fetch auths for this source
 	auths, _, err := authDao.ListForSource(application.SourceID, 100, 0, nil)

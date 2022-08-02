@@ -9,6 +9,7 @@ import (
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/fixtures"
 	"github.com/RedHatInsights/sources-api-go/model"
 	"github.com/RedHatInsights/sources-api-go/util"
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestDeleteApplicationAuthentication tests that an applicationAuthentication gets correctly deleted, and its data returned.
@@ -16,27 +17,15 @@ func TestDeleteApplicationAuthentication(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("delete")
 
-	applicationAuthenticationDao := GetApplicationAuthenticationDao(&fixtures.TestSourceData[0].TenantID)
+	applicationAuthenticationDao := GetApplicationAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
-	applicationAuthentication := fixtures.TestApplicationAuthenticationData[0]
-	// Set the ID to 0 to let GORM know it should insert a new applicationAuthentication and not update an existing one.
-	applicationAuthentication.ID = 0
-	// Set some data to compare the returned applicationAuthentication.
-	applicationAuthentication.AuthenticationUID = "complex uuid"
-
-	// Create the test applicationAuthentication.
-	err := applicationAuthenticationDao.Create(&applicationAuthentication)
-	if err != nil {
-		t.Errorf("error creating applicationAuthentication: %s", err)
-	}
-
-	deletedApplicationAuthentication, err := applicationAuthenticationDao.Delete(&applicationAuthentication.ID)
+	deletedApplicationAuthentication, err := applicationAuthenticationDao.Delete(&fixtures.TestApplicationAuthenticationData[0].ID)
 	if err != nil {
 		t.Errorf("error deleting an applicationAuthentication: %s", err)
 	}
 
 	{
-		want := applicationAuthentication.ID
+		want := fixtures.TestApplicationAuthenticationData[0].ID
 		got := deletedApplicationAuthentication.ID
 
 		if want != got {
@@ -53,7 +42,7 @@ func TestDeleteApplicationAuthenticationNotExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("delete")
 
-	applicationAuthenticationDao := GetApplicationAuthenticationDao(&fixtures.TestSourceData[0].TenantID)
+	applicationAuthenticationDao := GetApplicationAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	nonExistentId := int64(12345)
 	_, err := applicationAuthenticationDao.Delete(&nonExistentId)
@@ -72,90 +61,40 @@ func TestApplicationAuthenticationsByApplicationsDatabase(t *testing.T) {
 	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("appauthfind")
 
-	// Get all the DAOs we are going to work with.
-	authDao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
-	appDao := GetApplicationDao(&fixtures.TestTenantData[0].Id)
-	appAuthDao := GetApplicationAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	tenantId := int64(1)
 
-	// Maximum of resources to create.
-	maxCreatedResources := 5
+	var apps []model.Application
+	var appAuthsWant []model.ApplicationAuthentication
 
-	// Store the resources for later.
-	var createdApps = make([]model.Application, 0, maxCreatedResources)
-	var createdAppAuths = make([]model.ApplicationAuthentication, 0, maxCreatedResources)
-	for i := 0; i < maxCreatedResources; i++ {
-		// Create the authentication.
-		auth := setUpValidAuthentication()
-		auth.ResourceID = fixtures.TestApplicationData[0].ID
-		auth.ResourceType = "Application"
-
-		err := authDao.Create(auth)
-		if err != nil {
-			t.Errorf(`could not create fixture authentication: %s`, err)
+	for _, appAuth := range fixtures.TestApplicationAuthenticationData {
+		if appAuth.TenantID == tenantId {
+			apps = append(apps, model.Application{ID: appAuth.ApplicationID})
+			appAuthsWant = append(appAuthsWant, model.ApplicationAuthentication{ID: appAuth.ID})
 		}
-
-		// Create the application.
-		app := model.Application{
-			ApplicationTypeID: fixtures.TestApplicationTypeData[0].Id,
-			SourceID:          fixtures.TestSourceData[0].ID,
-			TenantID:          fixtures.TestTenantData[0].Id,
-		}
-
-		err = appDao.Create(&app)
-		if err != nil {
-			t.Errorf(`could not create fixture application: %s`, err)
-		}
-
-		createdApps = append(createdApps, app)
-
-		// Create the application authentication.
-		appAuth := model.ApplicationAuthentication{
-			ApplicationID:    app.ID,
-			AuthenticationID: auth.DbID,
-			TenantID:         fixtures.TestTenantData[0].Id,
-		}
-
-		err = appAuthDao.Create(&appAuth)
-		if err != nil {
-			t.Errorf(`could not create fixture application authentication: %s`, err)
-		}
-
-		createdAppAuths = append(createdAppAuths, appAuth)
 	}
 
-	// Call the function under test.
-	dbAppAuths, err := appAuthDao.ApplicationAuthenticationsByResource("Source", createdApps, []model.Authentication{})
+	daoParams := RequestParams{TenantID: &tenantId}
+	appAuthDao := GetApplicationAuthenticationDao(&daoParams)
+	appAuthsOut, err := appAuthDao.ApplicationAuthenticationsByResource("Source", apps, nil)
 	if err != nil {
-		t.Errorf(`unexpected error when fetching the application authentications: %s`, err)
+		t.Error(err)
 	}
 
-	// Check that we fetched the correct amount of application authentications.
-	{
-		want := maxCreatedResources
-		got := len(dbAppAuths)
-
-		if want != got {
-			t.Errorf(`incorrect amount of application authentications fetched. Want "%d", got "%d"`, want, got)
-		}
+	if len(appAuthsOut) != len(appAuthsWant) {
+		t.Errorf("wrong count of returned app auths, wanted %d, got %d", len(appAuthsWant), len(appAuthsOut))
 	}
 
-	// Check that we fetched the correct application authentications.
-	for i := 0; i < maxCreatedResources; i++ {
-		{
-			want := createdAppAuths[i].ID
-			got := dbAppAuths[i].ID
-
-			if want != got {
-				t.Errorf(`incorrect application authentication fetched. Want application authentication with id "%d", got "%d"`, want, got)
+	// Check the IDs of returned app auths
+	for _, aaOut := range appAuthsOut {
+		var aaFound bool
+		for _, aaWant := range appAuthsWant {
+			if aaWant.ID == aaOut.ID {
+				aaFound = true
+				break
 			}
 		}
-		{
-			want := createdApps[i].ID
-			got := dbAppAuths[i].ApplicationID
-
-			if want != got {
-				t.Errorf(`incorrect application authentication fetched. Want application authentication with application id "%d", got "%d"`, want, got)
-			}
+		if !aaFound {
+			t.Errorf("application authentication with id = %d returned as output but was not expected", aaOut.ID)
 		}
 	}
 
@@ -170,8 +109,8 @@ func TestApplicationAuthenticationsByAuthenticationsDatabase(t *testing.T) {
 	SwitchSchema("appauthfind")
 
 	// Get all the DAOs we are going to work with.
-	authDao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
-	appAuthDao := GetApplicationAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	authDao := GetAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
+	appAuthDao := GetApplicationAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	// Maximum of authentications to create.
 	maxCreatedAuths := 5
@@ -250,9 +189,10 @@ func TestApplicationAuthenticationsByAuthenticationsDatabase(t *testing.T) {
 // and correct count of returned objects
 func TestApplicationAuthenticationListOffsetAndLimit(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
+	testutils.SkipIfNotSecretStoreDatabase(t)
 	SwitchSchema("offset_limit")
 
-	appAuthDao := GetApplicationAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	appAuthDao := GetApplicationAuthenticationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	wantCount := int64(len(fixtures.TestApplicationAuthenticationData))
 
 	for _, d := range fixtures.TestDataOffsetLimit {
@@ -279,4 +219,88 @@ func TestApplicationAuthenticationListOffsetAndLimit(t *testing.T) {
 		}
 	}
 	DropSchema("offset_limit")
+}
+
+func TestApplicationAuthenticationListUserOwnership(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	testutils.SkipIfNotSecretStoreDatabase(t)
+	schema := "user_ownership"
+	SwitchSchema(schema)
+
+	accountNumber := "112567"
+	userIDWithOwnRecords := "user_based_user"
+	otherUserIDWithOwnRecords := "other_user"
+	userIDWithoutOwnRecords := "another_user"
+
+	applicationTypeID := fixtures.TestApplicationTypeData[3].Id
+	sourceTypeID := fixtures.TestSourceTypeData[2].Id
+	recordsWithUserID, user, err := CreateSourceWithSubResources(sourceTypeID, applicationTypeID, accountNumber, &userIDWithOwnRecords)
+	if err != nil {
+		t.Errorf("unable to create source: %v", err)
+	}
+
+	_, _, err = CreateSourceWithSubResources(sourceTypeID, applicationTypeID, accountNumber, &otherUserIDWithOwnRecords)
+	if err != nil {
+		t.Errorf("unable to create source: %v", err)
+	}
+
+	recordsWithoutUserID, _, err := CreateSourceWithSubResources(sourceTypeID, applicationTypeID, accountNumber, nil)
+	if err != nil {
+		t.Errorf("unable to create source: %v", err)
+	}
+
+	requestParams := &RequestParams{TenantID: &user.TenantID, UserID: &user.Id}
+	appAuthDao := GetApplicationAuthenticationDao(requestParams)
+
+	appAuths, _, err := appAuthDao.List(100, 0, []util.Filter{})
+	if err != nil {
+		t.Errorf(`unexpected error when listing the application authentications: %s`, err)
+	}
+
+	var appAuthsIDs []int64
+	for _, appAuth := range appAuths {
+		appAuthsIDs = append(appAuthsIDs, appAuth.ID)
+	}
+
+	var expectedAppAuthsIDs []int64
+	for _, appAuth := range recordsWithUserID.ApplicationAuthentications {
+		expectedAppAuthsIDs = append(expectedAppAuthsIDs, appAuth.ID)
+	}
+
+	for _, appAuth := range recordsWithoutUserID.ApplicationAuthentications {
+		expectedAppAuthsIDs = append(expectedAppAuthsIDs, appAuth.ID)
+	}
+
+	if !cmp.Equal(appAuthsIDs, expectedAppAuthsIDs) {
+		t.Errorf("Expected application authentication IDS %v are not same with obtained ids: %v", expectedAppAuthsIDs, appAuthsIDs)
+	}
+
+	userWithoutOwnRecords, err := CreateUserForUserID(userIDWithoutOwnRecords, user.TenantID)
+	if err != nil {
+		t.Errorf(`unable to create user: %v`, err)
+	}
+
+	requestParams = &RequestParams{TenantID: &user.TenantID, UserID: &userWithoutOwnRecords.Id}
+	appAuthDao = GetApplicationAuthenticationDao(requestParams)
+
+	appAuths, _, err = appAuthDao.List(100, 0, []util.Filter{})
+	if err != nil {
+		t.Errorf(`unexpected error when listing the application authentications: %s`, err)
+	}
+
+	appAuthsIDs = []int64{}
+	for _, appAuth := range appAuths {
+		appAuthsIDs = append(appAuthsIDs, appAuth.ID)
+	}
+
+	expectedAppAuthsIDs = []int64{}
+	for _, appAuth := range recordsWithoutUserID.ApplicationAuthentications {
+		expectedAppAuthsIDs = append(expectedAppAuthsIDs, appAuth.ID)
+	}
+
+	if !cmp.Equal(appAuthsIDs, expectedAppAuthsIDs) {
+		t.Errorf("Expected application authentication IDS %v are not same with obtained ids: %v", expectedAppAuthsIDs, appAuthsIDs)
+	}
+
+	DropSchema(schema)
 }

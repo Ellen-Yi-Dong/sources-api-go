@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/RedHatInsights/sources-api-go/config"
+	"github.com/RedHatInsights/sources-api-go/dao"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/fixtures"
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/mocks"
@@ -25,6 +27,8 @@ import (
 )
 
 func TestAuthenticationList(t *testing.T) {
+	tenantId := int64(1)
+
 	c, rec := request.CreateTestContext(
 		http.MethodGet,
 		"/api/sources/v3.1/authentications",
@@ -33,7 +37,7 @@ func TestAuthenticationList(t *testing.T) {
 			"limit":    100,
 			"offset":   0,
 			"filters":  []util.Filter{},
-			"tenantID": int64(1),
+			"tenantID": tenantId,
 		},
 	)
 
@@ -60,7 +64,18 @@ func TestAuthenticationList(t *testing.T) {
 		t.Error("offset not set correctly")
 	}
 
-	if len(out.Data) != len(fixtures.TestAuthenticationData) {
+	var wantCount int
+	for _, a := range fixtures.TestAuthenticationData {
+		if a.TenantID == tenantId {
+			wantCount++
+		}
+	}
+
+	if out.Meta.Count != wantCount {
+		t.Error("not enough objects passed back from DB")
+	}
+
+	if len(out.Data) != wantCount {
 		t.Error("not enough objects passed back from DB")
 	}
 
@@ -89,60 +104,185 @@ func TestAuthenticationList(t *testing.T) {
 		}
 	}
 
-	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
-}
-
-func TestAuthenticationGet(t *testing.T) {
-	var id string
-	originalSecretStore := conf.SecretStore
-
-	// If we're running integration tests without Vault...
-	if parser.RunningIntegrationTests && !config.IsVaultOn() {
-		id = strconv.FormatInt(fixtures.TestAuthenticationData[0].DbID, 10)
-	} else {
-		// If we're either running unit tests, or integration tests with Vault, we force the secret store to be "vault"
-		// since there are multiple places where this "if config.IsVaultOn()" check is run.
-		conf.SecretStore = "vault"
-		id = fixtures.TestAuthenticationData[0].ID
-	}
-
-	c, rec := request.CreateTestContext(
-		http.MethodGet,
-		"/api/sources/v3.1/authentications/"+id,
-		nil,
-		map[string]interface{}{
-			"tenantID": int64(1),
-		},
-	)
-
-	c.SetParamNames("uid")
-	c.SetParamValues(id)
-
-	err := AuthenticationGet(c)
+	err = checkAllAuthenticationsBelongToTenant(tenantId, out.Data)
 	if err != nil {
 		t.Error(err)
 	}
 
-	if rec.Code != http.StatusOK {
-		t.Error("Did not return 200")
-	}
+	testutils.AssertLinks(t, c.Request().RequestURI, out.Links, 100, 0)
+}
 
-	var outAuthentication m.AuthenticationResponse
-	err = json.Unmarshal(rec.Body.Bytes(), &outAuthentication)
+// TestAuthenticationTenantNotExist tests that empty list is returned
+// for not existing tenant
+func TestAuthenticationTenantNotExist(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/authentications",
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	err := AuthenticationList(c)
 	if err != nil {
-		t.Error("Failed unmarshaling output")
+		t.Error(err)
 	}
 
-	if config.IsVaultOn() {
-		if outAuthentication.ID != id {
-			t.Error("ghosts infected the return")
+	templates.EmptySubcollectionListTest(t, c, rec)
+}
+
+// TestAuthenticationTenantWithoutAuthentications tests that empty list is returned
+// for a tenant without authentications
+func TestAuthenticationTenantWithoutAuthentications(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(3)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/authentications",
+		nil,
+		map[string]interface{}{
+			"limit":    100,
+			"offset":   0,
+			"filters":  []util.Filter{},
+			"tenantID": tenantId,
+		},
+	)
+
+	err := AuthenticationList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.EmptySubcollectionListTest(t, c, rec)
+}
+
+func TestAuthenticationListBadRequestInvalidFilter(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(1)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/authentications",
+		nil,
+		map[string]interface{}{
+			"limit":  100,
+			"offset": 0,
+			"filters": []util.Filter{
+				{Name: "wrongName", Value: []string{"wrongValue"}},
+			},
+			"tenantID": tenantId,
+		},
+	)
+
+	badRequestAuthenticationList := ErrorHandlingContext(AuthenticationList)
+	err := badRequestAuthenticationList(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.BadRequestTest(t, rec)
+}
+
+func TestAuthenticationGet(t *testing.T) {
+	tenantId := int64(1)
+	originalSecretStore := conf.SecretStore
+
+	// Run this test for secret store = [vault, database]
+	for _, s := range []string{"vault", "database"} {
+		conf.SecretStore = s
+
+		var id string
+		if config.IsVaultOn() {
+			conf.SecretStore = "vault"
+			id = fixtures.TestAuthenticationData[0].ID
+		} else {
+			id = strconv.FormatInt(fixtures.TestAuthenticationData[0].DbID, 10)
 		}
-	} else {
+
+		c, rec := request.CreateTestContext(
+			http.MethodGet,
+			"/api/sources/v3.1/authentications/"+id,
+			nil,
+			map[string]interface{}{
+				"tenantID": tenantId,
+			},
+		)
+
+		c.SetParamNames("uid")
+		c.SetParamValues(id)
+
+		err := AuthenticationGet(c)
+		if err != nil {
+			t.Error(err)
+		}
+
+		if rec.Code != http.StatusOK {
+			t.Error("Did not return 200")
+		}
+
+		var outAuthentication m.AuthenticationResponse
+		err = json.Unmarshal(rec.Body.Bytes(), &outAuthentication)
+		if err != nil {
+			t.Error("Failed unmarshaling output")
+		}
+
 		if outAuthentication.ID != id {
 			t.Errorf(`wrong authentication fetched. Want "%s", got "%s"`, id, outAuthentication.ID)
 		}
+
+		// Check the tenancy of returned authentication
+		for _, a := range fixtures.TestAuthenticationData {
+			var fixturesAuthId string
+			if config.IsVaultOn() {
+				fixturesAuthId = a.ID
+			} else {
+				fixturesAuthId = strconv.FormatInt(a.DbID, 10)
+			}
+
+			if fixturesAuthId == id {
+				if a.TenantID != tenantId {
+					t.Error("ghosts infected the return")
+				}
+				break
+			}
+		}
 	}
+
 	conf.SecretStore = originalSecretStore
+}
+
+func TestAuthenticationGetTenantNotExist(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := fixtures.NotExistingTenantId
+	uid := strconv.FormatInt(fixtures.TestAuthenticationData[0].DbID, 10)
+
+	c, rec := request.CreateTestContext(
+		http.MethodGet,
+		"/api/sources/v3.1/authentications/"+uid,
+		nil,
+		map[string]interface{}{
+			"tenantID": tenantId,
+		},
+	)
+
+	c.SetParamNames("uid")
+	c.SetParamValues(uid)
+
+	notFoundAuthenticationGet := ErrorHandlingContext(AuthenticationGet)
+	err := notFoundAuthenticationGet(c)
+	if err != nil {
+		t.Error(err)
+	}
+
+	templates.NotFoundTest(t, rec)
 }
 
 func TestAuthenticationGetNotFound(t *testing.T) {
@@ -170,68 +310,95 @@ func TestAuthenticationGetNotFound(t *testing.T) {
 }
 
 func TestAuthenticationCreate(t *testing.T) {
+	tenantId := int64(1)
+	// Set the encryption key
 	util.OverrideEncryptionKey(strings.Repeat("test", 8))
-	requestBody := m.AuthenticationCreateRequest{
-		Name:          util.StringRef("TestRequest"),
-		AuthType:      "test",
-		Username:      util.StringRef("testUser"),
-		Password:      util.StringRef("123456"),
-		ResourceType:  "Application",
-		ResourceIDRaw: 1,
-	}
 
-	body, err := json.Marshal(requestBody)
-	if err != nil {
-		t.Error("Could not marshal JSON")
-	}
+	// Test the creation of authentication for an application, fpr an endpoint
+	// and for a source
 
-	c, rec := request.CreateTestContext(
-		http.MethodPost,
-		"/api/sources/v3.1/authentications",
-		bytes.NewReader(body),
-		map[string]interface{}{
-			"tenantID": int64(1),
-		},
-	)
-	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+	for _, resourceType := range []string{"Application", "Endpoint", "Source"} {
+		requestBody := m.AuthenticationCreateRequest{
+			Name:          util.StringRef("TestRequest"),
+			AuthType:      "test",
+			Username:      util.StringRef("testUser"),
+			Password:      util.StringRef("123456"),
+			ResourceType:  resourceType,
+			ResourceIDRaw: 1,
+		}
 
-	err = AuthenticationCreate(c)
-	if err != nil {
-		t.Error(err)
-	}
+		body, err := json.Marshal(requestBody)
+		if err != nil {
+			t.Error("Could not marshal JSON")
+		}
 
-	if rec.Code != http.StatusCreated {
-		t.Errorf("Did not return 201. Body: %s", rec.Body.String())
-	}
+		c, rec := request.CreateTestContext(
+			http.MethodPost,
+			"/api/sources/v3.1/authentications",
+			bytes.NewReader(body),
+			map[string]interface{}{
+				"tenantID": tenantId,
+			},
+		)
+		c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 
-	auth := m.AuthenticationResponse{}
-	raw, _ := io.ReadAll(rec.Body)
-	err = json.Unmarshal(raw, &auth)
-	if err != nil {
-		t.Errorf("Failed to unmarshal application from response: %v", err)
-	}
+		err = AuthenticationCreate(c)
+		if err != nil {
+			t.Error(err)
+		}
 
-	if auth.ResourceType != "Application" {
-		t.Errorf("Wrong resource type, wanted %v got %v", "Application", auth.ResourceType)
-	}
+		if rec.Code != http.StatusCreated {
+			t.Errorf("Did not return 201. Body: %s", rec.Body.String())
+		}
 
-	if auth.Username != "testUser" {
-		t.Errorf("Wrong user name, wanted %v got %v", "testUser", auth.Username)
-	}
+		auth := m.AuthenticationResponse{}
+		raw, _ := io.ReadAll(rec.Body)
+		err = json.Unmarshal(raw, &auth)
+		if err != nil {
+			t.Errorf("Failed to unmarshal application from response: %v", err)
+		}
 
-	if auth.ResourceID != "1" {
-		t.Errorf("Wrong resource ID, wanted %v got %v", 1, auth.ResourceID)
+		if auth.ResourceType != resourceType {
+			t.Errorf("Wrong resource type, wanted %v got %v", "Application", auth.ResourceType)
+		}
+
+		if auth.Username != "testUser" {
+			t.Errorf("Wrong user name, wanted %v got %v", "testUser", auth.Username)
+		}
+
+		if auth.ResourceID != "1" {
+			t.Errorf("Wrong resource ID, wanted %v got %v", 1, auth.ResourceID)
+		}
+
+		// Check the tenancy (only for integration tests)
+		// and
+		// Delete created authentication (it makes sense only for integration tests, in case of unit tests
+		// the mock for auth create doesn't create new auth in the memory)
+		if parser.RunningIntegrationTests {
+			requestParams := dao.RequestParams{TenantID: &tenantId}
+			authenticationDao := dao.GetAuthenticationDao(&requestParams)
+			authOut, err := authenticationDao.GetById(auth.ID)
+			if err != nil {
+				t.Error(err)
+			}
+			if authOut.TenantID != tenantId {
+				t.Errorf("authentication's tenant id = %d, expected %d", authOut.TenantID, tenantId)
+			}
+
+			_, err = authenticationDao.Delete(auth.ID)
+			if err != nil {
+				t.Error(err)
+			}
+		}
 	}
 }
 
-func TestAuthenticationCreateBadRequest(t *testing.T) {
+func TestAuthenticationCreateBadRequestInvalidResourceType(t *testing.T) {
 	requestBody := m.AuthenticationCreateRequest{
-		Name:         util.StringRef("TestRequest"),
-		AuthType:     "test",
-		Username:     util.StringRef("testUser"),
-		Password:     util.StringRef("123456"),
-		ResourceType: "InvalidType",
-		ResourceID:   1,
+		Username:      util.StringRef("testUser"),
+		Password:      util.StringRef("123456"),
+		ResourceType:  "InvalidType",
+		ResourceIDRaw: 1,
 	}
 
 	body, err := json.Marshal(requestBody)
@@ -256,6 +423,46 @@ func TestAuthenticationCreateBadRequest(t *testing.T) {
 	}
 
 	templates.BadRequestTest(t, rec)
+}
+
+// TestAuthenticationCreateResourceNotFound tests that bad request is returned when
+// you try to create authentication for not existing resource
+func TestAuthenticationCreateResourceNotFound(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	tenantId := int64(1)
+
+	for _, resourceType := range []string{"Application", "Endpoint", "Source"} {
+
+		requestBody := m.AuthenticationCreateRequest{
+			Username:      util.StringRef("testUser"),
+			Password:      util.StringRef("123456"),
+			ResourceType:  resourceType,
+			ResourceIDRaw: 54321,
+		}
+
+		body, err := json.Marshal(requestBody)
+		if err != nil {
+			t.Error("Could not marshal JSON")
+		}
+
+		c, rec := request.CreateTestContext(
+			http.MethodPost,
+			"/api/sources/v3.1/authentications",
+			bytes.NewReader(body),
+			map[string]interface{}{
+				"tenantID": tenantId,
+			},
+		)
+		c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
+
+		badRequestAuthenticationCreate := ErrorHandlingContext(AuthenticationCreate)
+		err = badRequestAuthenticationCreate(c)
+		if err != nil {
+			t.Error(err)
+		}
+
+		templates.BadRequestTest(t, rec)
+	}
 }
 
 func TestAuthenticationEdit(t *testing.T) {
@@ -458,4 +665,22 @@ func TestAuthenticationDeleteNotFound(t *testing.T) {
 	}
 
 	templates.NotFoundTest(t, rec)
+}
+
+// HELPERS:
+
+// checkAllAuthenticationsBelongToTenant checks that all returned authentications belong to given tenant
+func checkAllAuthenticationsBelongToTenant(tenantId int64, authentications []interface{}) error {
+	for _, authOut := range authentications {
+		authOutId := authOut.(map[string]interface{})["id"].(string)
+		// find authentication in fixtures and check the tenant id
+		for _, auth := range fixtures.TestAuthenticationData {
+			if authOutId == auth.ID {
+				if auth.TenantID != tenantId {
+					return fmt.Errorf("expected tenant id = %d, got %d", tenantId, auth.TenantID)
+				}
+			}
+		}
+	}
+	return nil
 }

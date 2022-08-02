@@ -38,6 +38,10 @@ func ParseHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 			c.Set(h.ORGID, c.Request().Header.Get(h.ORGID))
 		}
 
+		if c.Request().Header.Get(h.PSK_USER) != "" {
+			c.Set(h.PSK_USER, c.Request().Header.Get(h.PSK_USER))
+		}
+
 		// parsing the base64-encoded identity header if present
 		if c.Request().Header.Get(h.XRHID) != "" {
 			// store it raw first.
@@ -51,8 +55,12 @@ func ParseHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 			// store the parsed header for later usage.
 			c.Set(h.PARSED_IDENTITY, xRhIdentity)
 
+			// store the account number + org_id for easy usage later
+			c.Set(h.ACCOUNT_NUMBER, xRhIdentity.Identity.AccountNumber)
+			c.Set(h.ORGID, xRhIdentity.Identity.OrgID)
+
 			// store whether or not this a cert-auth based request
-			if xRhIdentity.Identity.System != nil && xRhIdentity.Identity.System["cn"] != nil {
+			if xRhIdentity.Identity.System.CommonName != "" {
 				c.Set("cert-auth", true)
 			}
 		} else {

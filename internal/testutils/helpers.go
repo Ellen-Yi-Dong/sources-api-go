@@ -9,6 +9,7 @@ import (
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/parser"
 	"github.com/RedHatInsights/sources-api-go/model"
 	"github.com/RedHatInsights/sources-api-go/util"
+	"github.com/redhatinsights/platform-go-middlewares/identity"
 )
 
 var conf = config.Get()
@@ -65,4 +66,27 @@ func AssertLinks(t *testing.T, path string, links util.Links, limit int, offset 
 	if links.Last != expectedLastLink {
 		t.Error("last link is not correct for " + path)
 	}
+}
+
+func IdentityHeaderForUser(testUserId string) *identity.XRHID {
+	accountNumber := fixtures.TestTenantData[0].ExternalTenant
+	return &identity.XRHID{Identity: identity.Identity{AccountNumber: accountNumber, User: identity.User{UserID: testUserId}}}
+}
+
+func SingleResourceBulkCreateRequest(nameSource, sourceTypeName, applicationTypeName, authenticationResourceType string) *model.BulkCreateRequest {
+	sourceCreateRequest := model.SourceCreateRequest{Name: &nameSource}
+	bulkCreateSource := model.BulkCreateSource{SourceCreateRequest: sourceCreateRequest, SourceTypeName: sourceTypeName}
+
+	bulkCreateApplication := model.BulkCreateApplication{SourceName: nameSource, ApplicationTypeName: applicationTypeName}
+
+	authenticationCreateRequest := model.AuthenticationCreateRequest{ResourceType: authenticationResourceType}
+	bulkCreateAuthentication := model.BulkCreateAuthentication{AuthenticationCreateRequest: authenticationCreateRequest, ResourceName: applicationTypeName}
+
+	endpointCreateRequest := model.EndpointCreateRequest{}
+	bulkCreateEndpoints := model.BulkCreateEndpoint{EndpointCreateRequest: endpointCreateRequest, SourceName: nameSource}
+
+	return &model.BulkCreateRequest{Sources: []model.BulkCreateSource{bulkCreateSource},
+		Applications:    []model.BulkCreateApplication{bulkCreateApplication},
+		Authentications: []model.BulkCreateAuthentication{bulkCreateAuthentication},
+		Endpoints:       []model.BulkCreateEndpoint{bulkCreateEndpoints}}
 }

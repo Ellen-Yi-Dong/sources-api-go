@@ -33,8 +33,16 @@ func BulkCreate(c echo.Context) error {
 		return fmt.Errorf("failed to pull identity from request")
 	}
 
+	user := &m.User{TenantID: tenantID}
+	userID, ok := c.Get(h.USERID).(int64)
+
+	if ok {
+		user.UserID = id.Identity.User.UserID
+		user.Id = userID
+	}
+
 	// TODO: Pull the identity from the context after the org_id changes are merged.
-	output, err := service.BulkAssembly(req, &m.Tenant{Id: tenantID, ExternalTenant: id.Identity.AccountNumber})
+	output, err := service.BulkAssembly(req, &m.Tenant{Id: tenantID, ExternalTenant: id.Identity.AccountNumber}, user)
 	if err != nil {
 		return err
 	}

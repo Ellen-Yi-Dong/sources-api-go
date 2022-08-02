@@ -17,19 +17,22 @@ import (
 )
 
 const (
-	sourcesStatusTopic      = "platform.sources.status"
-	groupID                 = "sources-api-status-worker"
-	eventAvailabilityStatus = "availability_status"
+	sourcesStatusRequestedTopic = "platform.sources.status"
+	groupID                     = "sources-api-status-worker"
+	eventAvailabilityStatus     = "availability_status"
 )
 
-var config = c.Get()
+var (
+	config             = c.Get()
+	sourcesStatusTopic = config.KafkaTopic(sourcesStatusRequestedTopic)
+)
 
 type AvailabilityStatusListener struct {
 	*events.EventStreamProducer
 }
 
 func Run(shutdown chan struct{}) {
-	l.Log.Infof("Starting Availability Status Listener on topic [%v]", config.KafkaTopic(sourcesStatusTopic))
+	l.Log.Infof("Starting Availability Status Listener on topic [%v]", sourcesStatusTopic)
 
 	avs := AvailabilityStatusListener{EventStreamProducer: NewEventStreamProducer()}
 	avs.subscribeToAvailabilityStatus(shutdown)
@@ -45,28 +48,20 @@ func (avs *AvailabilityStatusListener) subscribeToAvailabilityStatus(shutdown ch
 		panic("logging is not initialized")
 	}
 
-	kafkaConfig := kafka.Config{
-		KafkaBrokers: config.KafkaBrokers,
-		ConsumerConfig: kafka.ConsumerConfig{
-			Topic:   config.KafkaTopic(sourcesStatusTopic),
-			GroupID: groupID},
+	kf, err := kafka.GetReader(&config.KafkaBrokerConfig, groupID, sourcesStatusTopic)
+	if err != nil {
+		l.Log.Errorf(`could not get a Kafka reader: %s`, err)
+		return
 	}
 
-	kf := &kafka.Manager{Config: kafkaConfig}
+	defer kafka.CloseReader(kf, "subscribe availability status. Shutdown signal received")
 
 	// run async for graceful shutdown handling
 	go func() {
-		if err := kf.Consume(avs.ConsumeStatusMessage); err != nil {
-			l.Log.Errorf("Consumer kafka message error: %s", err.Error())
-		}
+		kafka.Consume(kf, avs.ConsumeStatusMessage)
 	}()
 
 	<-shutdown
-	l.Log.Infof("Closing Kafka Consumer...")
-
-	if err := kf.Consumer().Close(); err != nil {
-		l.Log.Warn(err)
-	}
 	shutdown <- struct{}{}
 }
 
@@ -109,13 +104,6 @@ func (avs *AvailabilityStatusListener) processEvent(statusMessage types.StatusMe
 		return
 	}
 
-	updateAttributes := avs.attributesForUpdate(statusMessage)
-	modelEventDao, err := dao.GetFromResourceType(statusMessage.ResourceType)
-	if err != nil {
-		l.Log.Error(err)
-		return
-	}
-
 	id, err := util.IdentityFromKafkaHeaders(headers)
 	if err != nil {
 		l.Log.Error(err)
@@ -129,9 +117,16 @@ func (avs *AvailabilityStatusListener) processEvent(statusMessage types.StatusMe
 		return
 	}
 
+	updateAttributes := avs.attributesForUpdate(statusMessage)
+	modelEventDao, err := dao.GetFromResourceType(statusMessage.ResourceType, tenant.Id)
+	if err != nil {
+		l.Log.Error(err)
+		return
+	}
+
 	previousStatus, err := dao.GetAvailabilityStatusFromStatusMessage(tenant.Id, statusMessage.ResourceID, statusMessage.ResourceType)
 	if err != nil {
-		l.Log.Errorf("unable to get status availability: %s", err)
+		l.Log.Errorf("[tenant_id: %d][resource_type: %s][resource_id: %s] unable to get status availability: %s", tenant.Id, statusMessage.ResourceType, statusMessage.ResourceID, err)
 		return
 	}
 
@@ -139,16 +134,16 @@ func (avs *AvailabilityStatusListener) processEvent(statusMessage types.StatusMe
 	resource.AccountNumber = tenant.ExternalTenant
 	resultRecord, err := modelEventDao.FetchAndUpdateBy(*resource, updateAttributes)
 	if err != nil {
-		l.Log.Errorf("unable to update availability status: %s", err)
+		l.Log.Errorf("[tenant_id: %d][resource_type: %s][resource_id: %d][resource_uuid: %s] unable to update availability status: %s", resource.TenantID, resource.ResourceType, resource.ResourceID, resource.ResourceUID, err)
 		return
 	}
 
 	if previousStatus != statusMessage.Status {
 		if statusMessage.ResourceType == "Application" {
-			appDao := dao.GetApplicationDao(&tenant.Id)
+			appDao := dao.GetApplicationDao(&dao.RequestParams{TenantID: &tenant.Id})
 			app, err := appDao.GetById(&resource.ResourceID)
 			if err != nil {
-				l.Log.Errorf("unable to fetch application: %s", err)
+				l.Log.Errorf("[tenant_id: %d][application_id: %d] unable to fetch application: %s", tenant.Id, resource.ResourceID, err)
 				return
 			}
 
@@ -166,7 +161,7 @@ func (avs *AvailabilityStatusListener) processEvent(statusMessage types.StatusMe
 		if emailInfo != nil {
 			err = service.EmitAvailabilityStatusNotification(id, emailInfo.ToEmail(previousStatus))
 			if err != nil {
-				l.Log.Errorf("unable to emit notification: %v", err)
+				l.Log.Errorf("[tenant_id: %d][resource_type: %s][resource_id: %d][resource_uuid: %s] unable to emit notification: %v", resource.TenantID, resource.ResourceType, resource.ResourceID, resource.ResourceUID, err)
 			}
 		}
 	}
@@ -178,7 +173,7 @@ func (avs *AvailabilityStatusListener) processEvent(statusMessage types.StatusMe
 	}
 	sort.Strings(updateAttributeKeys)
 
-	err = avs.EventStreamProducer.RaiseEventForUpdate(*resource, updateAttributeKeys, headers)
+	err = avs.EventStreamProducer.RaiseEventForUpdate(modelEventDao, *resource, updateAttributeKeys, headers)
 
 	if err != nil {
 		l.Log.Errorf("Error in raising event for update: %s, resource: %s(%s)", err.Error(), statusMessage.ResourceType, statusMessage.ResourceID)

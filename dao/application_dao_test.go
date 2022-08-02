@@ -12,6 +12,7 @@ import (
 	"github.com/RedHatInsights/sources-api-go/internal/testutils/fixtures"
 	m "github.com/RedHatInsights/sources-api-go/model"
 	"github.com/RedHatInsights/sources-api-go/util"
+	"github.com/google/go-cmp/cmp"
 )
 
 // testApplication holds a test application in order to avoid having to write the "fixtures..." stuff every time.
@@ -22,7 +23,7 @@ func TestPausingApplication(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("pause_unpause")
 
-	applicationDao := GetApplicationDao(&fixtures.TestSourceData[0].TenantID)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	err := applicationDao.Pause(testApplication.ID)
 	if err != nil {
 		t.Errorf(`want nil error, got "%s"`, err)
@@ -46,7 +47,7 @@ func TestResumeApplication(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("pause_unpause")
 
-	applicationDao := GetApplicationDao(&testApplication.TenantID)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &testApplication.TenantID})
 	err := applicationDao.Unpause(testApplication.ID)
 
 	if err != nil {
@@ -71,13 +72,16 @@ func TestDeleteApplication(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("delete")
 
-	applicationDao := GetApplicationDao(&fixtures.TestSourceData[0].TenantID)
+	tenantId := fixtures.TestTenantData[0].Id
+	daoParams := RequestParams{TenantID: &tenantId}
+	applicationDao := GetApplicationDao(&daoParams)
 
-	application := fixtures.TestApplicationData[0]
-	// Set the ID to 0 to let GORM know it should insert a new application and not update an existing one.
-	application.ID = 0
-	// Set some data to compare the returned application.
-	application.Extra = []byte(`{"hello": "world"}`)
+	application := m.Application{
+		Extra:             []byte(`{"hello": "world"}`),
+		SourceID:          fixtures.TestSourceData[1].ID,
+		TenantID:          tenantId,
+		ApplicationTypeID: fixtures.TestApplicationTypeData[1].Id,
+	}
 
 	// Create the test application.
 	err := applicationDao.Create(&application)
@@ -117,7 +121,7 @@ func TestDeleteApplicationNotExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("delete")
 
-	applicationDao := GetApplicationDao(&fixtures.TestSourceData[0].TenantID)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	nonExistentId := int64(12345)
 	_, err := applicationDao.Delete(&nonExistentId)
@@ -134,11 +138,13 @@ func TestApplicationDeleteCascade(t *testing.T) {
 	SwitchSchema("delete")
 
 	// Create a new application on the database to cleanly test the function under test.
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[0].Id)
+	tenantId := int64(1)
+	daoParams := RequestParams{TenantID: &tenantId}
+	applicationDao := GetApplicationDao(&daoParams)
 	fixtureApp := m.Application{
-		ApplicationTypeID: fixtures.TestApplicationTypeData[0].Id,
-		SourceID:          fixtures.TestSourceData[0].ID,
-		TenantID:          fixtures.TestTenantData[0].Id,
+		ApplicationTypeID: fixtures.TestApplicationTypeData[1].Id,
+		SourceID:          fixtures.TestSourceData[1].ID,
+		TenantID:          tenantId,
 	}
 
 	err := applicationDao.Create(&fixtureApp)
@@ -148,8 +154,8 @@ func TestApplicationDeleteCascade(t *testing.T) {
 
 	// Create the authentications and the application authentications. The former are needed to avoid the foreign key
 	// constraints.
-	authenticationDao := GetAuthenticationDao(&fixtures.TestTenantData[0].Id)
-	applicationAuthenticationDao := GetApplicationAuthenticationDao(&fixtures.TestTenantData[0].Id)
+	authenticationDao := GetAuthenticationDao(&daoParams)
+	applicationAuthenticationDao := GetApplicationAuthenticationDao(&daoParams)
 
 	// Set the maximum amount of authentications we will create.
 	maxAuthenticationsCreated := 5
@@ -169,7 +175,7 @@ func TestApplicationDeleteCascade(t *testing.T) {
 
 		// Create the association between the application and its authentication.
 		appAuth := m.ApplicationAuthentication{
-			TenantID:          fixtures.TestTenantData[0].Id,
+			TenantID:          tenantId,
 			ApplicationID:     fixtureApp.ID,
 			AuthenticationID:  authentication.DbID,
 			AuthenticationUID: fmt.Sprintf("%d", i),
@@ -194,7 +200,7 @@ func TestApplicationDeleteCascade(t *testing.T) {
 		Debug().
 		Model(m.ApplicationAuthentication{}).
 		Where("application_id = ?", fixtureApp.ID).
-		Where("tenant_id = ?", fixtures.TestTenantData[0].Id).
+		Where("tenant_id = ?", tenantId).
 		Count(&appAuthCount).
 		Error
 
@@ -239,7 +245,7 @@ func TestApplicationDeleteCascade(t *testing.T) {
 		Debug().
 		Model(m.Application{}).
 		Where(`id = ?`, fixtureApp.ID).
-		Where(`tenant_id = ?`, fixtures.TestTenantData[0].Id).
+		Where(`tenant_id = ?`, tenantId).
 		Find(&deletedApplicationCheck).
 		Error
 
@@ -287,7 +293,7 @@ func TestApplicationExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("exists")
 
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[0].Id)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	got, err := applicationDao.Exists(fixtures.TestApplicationData[0].ID)
 	if err != nil {
@@ -306,7 +312,7 @@ func TestApplicationNotExists(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("exists")
 
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[0].Id)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 
 	got, err := applicationDao.Exists(12345)
 	if err != nil {
@@ -326,7 +332,7 @@ func TestApplicationSubcollectionListWithOffsetAndLimit(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("offset_limit")
 
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[0].Id)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	sourceId := fixtures.TestSourceData[0].ID
 
 	var wantCount int64
@@ -368,7 +374,7 @@ func TestApplicationListOffsetAndLimit(t *testing.T) {
 	testutils.SkipIfNotRunningIntegrationTests(t)
 	SwitchSchema("offset_limit")
 
-	applicationDao := GetApplicationDao(&fixtures.TestTenantData[0].Id)
+	applicationDao := GetApplicationDao(&RequestParams{TenantID: &fixtures.TestTenantData[0].Id})
 	wantCount := int64(len(fixtures.TestApplicationData))
 
 	for _, d := range fixtures.TestDataOffsetLimit {
@@ -395,4 +401,88 @@ func TestApplicationListOffsetAndLimit(t *testing.T) {
 		}
 	}
 	DropSchema("offset_limit")
+}
+
+func TestApplicationListUserOwnership(t *testing.T) {
+	testutils.SkipIfNotRunningIntegrationTests(t)
+	testutils.SkipIfNotSecretStoreDatabase(t)
+	schema := "user_ownership"
+	SwitchSchema(schema)
+
+	accountNumber := "112567"
+	userIDWithOwnRecords := "user_based_user"
+	otherUserIDWithOwnRecords := "other_user"
+	userIDWithoutOwnRecords := "another_user"
+
+	applicationTypeID := fixtures.TestApplicationTypeData[3].Id
+	sourceTypeID := fixtures.TestSourceTypeData[2].Id
+	recordsWithUserID, user, err := CreateSourceWithSubResources(sourceTypeID, applicationTypeID, accountNumber, &userIDWithOwnRecords)
+	if err != nil {
+		t.Errorf("unable to create source: %v", err)
+	}
+
+	_, _, err = CreateSourceWithSubResources(sourceTypeID, applicationTypeID, accountNumber, &otherUserIDWithOwnRecords)
+	if err != nil {
+		t.Errorf("unable to create source: %v", err)
+	}
+
+	recordsWithoutUserID, _, err := CreateSourceWithSubResources(sourceTypeID, applicationTypeID, accountNumber, nil)
+	if err != nil {
+		t.Errorf("unable to create source: %v", err)
+	}
+
+	requestParams := &RequestParams{TenantID: &user.TenantID, UserID: &user.Id}
+	applicationDao := GetApplicationDao(requestParams)
+
+	applications, _, err := applicationDao.List(100, 0, []util.Filter{})
+	if err != nil {
+		t.Errorf(`unexpected error when listing the application authentications: %s`, err)
+	}
+
+	var applicationIDs []int64
+	for _, application := range applications {
+		applicationIDs = append(applicationIDs, application.ID)
+	}
+
+	var expectedApplicationIDs []int64
+	for _, application := range recordsWithUserID.Applications {
+		expectedApplicationIDs = append(expectedApplicationIDs, application.ID)
+	}
+
+	for _, application := range recordsWithoutUserID.Applications {
+		expectedApplicationIDs = append(expectedApplicationIDs, application.ID)
+	}
+
+	if !cmp.Equal(applicationIDs, expectedApplicationIDs) {
+		t.Errorf("Expected application authentication IDS %v are not same with obtained ids: %v", expectedApplicationIDs, applicationIDs)
+	}
+
+	userWithoutOwnRecords, err := CreateUserForUserID(userIDWithoutOwnRecords, user.TenantID)
+	if err != nil {
+		t.Errorf(`unable to create user: %v`, err)
+	}
+
+	requestParams = &RequestParams{TenantID: &user.TenantID, UserID: &userWithoutOwnRecords.Id}
+	applicationDao = GetApplicationDao(requestParams)
+
+	applications, _, err = applicationDao.List(100, 0, []util.Filter{})
+	if err != nil {
+		t.Errorf(`unexpected error when listing the application authentications: %s`, err)
+	}
+
+	applicationIDs = []int64{}
+	for _, application := range applications {
+		applicationIDs = append(applicationIDs, application.ID)
+	}
+
+	expectedApplicationIDs = []int64{}
+	for _, application := range recordsWithoutUserID.Applications {
+		expectedApplicationIDs = append(expectedApplicationIDs, application.ID)
+	}
+
+	if !cmp.Equal(applicationIDs, expectedApplicationIDs) {
+		t.Errorf("Expected application authentication IDS %v are not same with obtained ids: %v", expectedApplicationIDs, applicationIDs)
+	}
+
+	DropSchema(schema)
 }

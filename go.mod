@@ -22,10 +22,9 @@ require (
 	github.com/labstack/echo-contrib v0.12.0
 	github.com/labstack/echo/v4 v4.6.1
 	github.com/labstack/gommon v0.3.1
-	github.com/neko-neko/echo-logrus/v2 v2.0.1
 	github.com/prometheus/client_golang v1.12.1
-	github.com/redhatinsights/app-common-go v1.6.0
-	github.com/redhatinsights/platform-go-middlewares v0.12.0
+	github.com/redhatinsights/app-common-go v1.6.3
+	github.com/redhatinsights/platform-go-middlewares v0.19.0
 	github.com/redhatinsights/sources-superkey-worker v0.0.0-20220110114734-d076299a7d68
 	github.com/segmentio/kafka-go v0.4.25
 	github.com/sirupsen/logrus v1.8.1
